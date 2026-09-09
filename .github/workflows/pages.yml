@@ -38,6 +38,8 @@ jobs:
         run: npm install --no-save --no-audit --no-fund jsdom
       - name: Boot the app and drive it
         run: node scripts/test-dom.mjs
+      - name: Drag and drop
+        run: node scripts/test-dnd.mjs
 
   deploy:
     name: Deploy

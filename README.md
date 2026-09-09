@@ -320,10 +320,25 @@ node scripts/check.mjs         19 modules — imports and element ids resolve
 node scripts/test-store.mjs    22 tests   — board model, linked duplicates, undo
 node scripts/test-ingest.mjs   12 tests   — Zotero import shape, sync safety
 node scripts/test-dom.mjs      29 tests   — boots the real app in jsdom and drives it
+node scripts/test-dnd.mjs      13 tests   — synthesises pointer drags over a fake layout
 ```
 
-The last one needs `npm install --no-save jsdom`, and skips itself politely if
-it is absent. It builds the document from `index.html`, hands the DOM to Node's
-module loader, and then clicks through the actual UI — adding groups, opening
-the book page, running `/read` end to end, checking the context menus, undoing a
-duplicate. All four run in CI before every deploy.
+The last two need `npm install --no-save jsdom`, and skip themselves politely if
+it is absent.
+
+`test-dom.mjs` builds the document from `index.html`, hands the DOM to Node's
+module loader, and clicks through the actual UI — adding groups, opening the
+book page, running `/read` end to end, checking the context menus, undoing a
+duplicate.
+
+`test-dnd.mjs` goes further. jsdom has no layout engine, so `elementFromPoint`
+and `getBoundingClientRect` return nothing useful and drag-and-drop would be
+untestable. It therefore assigns every column and card a rectangle, resolves
+hit-tests against them, and synthesises pointer events over the top — exercising
+the real `dnd.js`: the movement threshold, the insertion index, multi-select
+drags, column and sidebar reordering, and the touch long-press that keeps
+columns scrollable.
+
+Both suites are mutation-checked: breaking the drag threshold, the drop index,
+the selection carry, or the touch grip each fails exactly the test that covers
+it. All five run in CI before every deploy.
