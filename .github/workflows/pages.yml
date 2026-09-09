@@ -1,0 +1,72 @@
+name: Deploy to GitHub Pages
+
+# The site is plain ES modules with no build step, so "deploy" is really just
+# "upload the repo and publish it". Pushing to main is the whole workflow.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; let a newer push supersede an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify modules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # The app itself has no dependencies; jsdom is only for the smoke test.
+      - name: Resolve imports and element ids
+        run: node scripts/check.mjs
+      - name: Board model tests
+        run: node scripts/test-store.mjs
+      - name: Zotero ingest tests
+        run: node scripts/test-ingest.mjs
+      - name: Install jsdom
+        run: npm install --no-save --no-audit --no-fund jsdom
+      - name: Boot the app and drive it
+        run: node scripts/test-dom.mjs
+
+  deploy:
+    name: Deploy
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Stage the site
+        # Ship only what the browser needs; the Node-only scripts stay behind.
+        run: |
+          mkdir -p _site
+          cp -r index.html css js _site/
+          cp manifest.webmanifest _site/ 2>/dev/null || true
+          cp README.md _site/ 2>/dev/null || true
+          # Pages runs Jekyll by default, which ignores files beginning with _.
+          touch _site/.nojekyll
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

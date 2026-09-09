@@ -1,0 +1,68 @@
+name: Nightly Zotero sync
+
+# Pulls the board from the private Gist, folds in anything new from Zotero, and
+# pushes it back — so books added to a Zotero subcollection during the day are
+# on the board by morning.
+#
+# GitHub cron is UTC-only and does not follow daylight saving, so 23:00 in
+# America/Los_Angeles is 07:00 UTC in winter (PST) and 06:00 UTC in summer
+# (PDT). Both are scheduled and the job itself checks the real local hour,
+# which keeps it at 11pm Pacific all year instead of drifting by an hour.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 23:00 PDT
+    - cron: '0 7 * * *'   # 23:00 PST
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report what would change without writing to the Gist'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync Zotero into the board
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Is it 11pm in Los Angeles?
+        id: gate
+        run: |
+          # Manual runs always proceed; scheduled ones only at the right local hour.
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Manual run — proceeding."
+            exit 0
+          fi
+          HOUR=$(TZ=America/Los_Angeles date +%H)
+          echo "Local hour in Los Angeles: $HOUR"
+          if [ "$HOUR" = "23" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Not 23:00 locally — this is the other DST schedule. Skipping."
+          fi
+
+      - name: Sync
+        if: steps.gate.outputs.run == 'true'
+        env:
+          ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
+          ZOTERO_USER_ID: ${{ secrets.ZOTERO_USER_ID }}
+          ZOTERO_DATA_DIR: ${{ secrets.ZOTERO_DATA_DIR }}
+          GH_GIST_TOKEN: ${{ secrets.GH_GIST_TOKEN }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+        run: |
+          node scripts/nightly_sync.mjs ${{ inputs.dry_run && '--dry-run' || '' }}

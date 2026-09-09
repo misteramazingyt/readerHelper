@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="A Kanban reading tracker wired to Zotero and Todoist.">
+<meta name="theme-color" content="#111318">
+<title>readerHelper</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📖</text></svg>">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div id="app" class="app">
+
+  <!-- ------------------------------------------------------------ sidebar -->
+  <aside id="sidebar" class="sidebar" aria-label="Projects">
+    <header class="sidebar__header">
+      <h1 class="sidebar__title">Projects</h1>
+      <button id="project-sort-btn" class="icon-btn" type="button" title="Order projects" aria-label="Order projects">⇅</button>
+    </header>
+
+    <div id="project-list"
+         class="sidebar__list"
+         data-drop-zone="projects"
+         data-accept="project"
+         role="list"></div>
+
+    <footer class="sidebar__footer">
+      <button id="add-project-btn" class="pill-btn" type="button" title="New project">
+        <span class="pill-btn__glyph">+</span>
+      </button>
+      <button id="zotero-import-btn" class="pill-btn" type="button" title="Import a Zotero collection">
+        <span class="pill-btn__glyph">Z</span>
+      </button>
+    </footer>
+  </aside>
+
+  <div id="scrim" class="scrim" aria-hidden="true"></div>
+
+  <!-- --------------------------------------------------------------- main -->
+  <main class="main">
+    <header class="topbar">
+      <button id="menu-btn" class="icon-btn icon-btn--menu" type="button"
+              aria-label="Show projects" aria-expanded="false" aria-controls="sidebar">☰</button>
+
+      <div class="topbar__titles">
+        <h2 id="active-project-title" class="topbar__title" title="Double-click to rename">readerHelper</h2>
+        <p id="active-project-meta" class="topbar__meta"></p>
+      </div>
+
+      <div class="topbar__actions">
+        <button id="group-sort-btn" class="text-btn" type="button" title="Order groups"></button>
+        <button id="palette-btn" class="icon-btn" type="button" title="Command palette (Shift+Space)" aria-label="Command palette">⌘</button>
+        <button id="sync-btn" class="icon-btn" type="button" title="Sync with Zotero" aria-label="Sync with Zotero">⟳</button>
+        <button id="archive-btn" class="icon-btn" type="button" title="Archive" aria-label="Archive">📥</button>
+        <button id="settings-btn" class="icon-btn" type="button" title="Settings" aria-label="Settings">⚙</button>
+        <button id="help-btn" class="icon-btn" type="button" title="Help" aria-label="Help">?</button>
+      </div>
+    </header>
+
+    <div id="board"
+         class="board"
+         data-drop-zone="columns"
+         data-accept="column"
+         data-axis="x"></div>
+
+    <footer class="statusbar">
+      <div class="overall" title="Mean progress across the books in this project">
+        <div id="overall-fill" class="overall__fill"></div>
+      </div>
+      <span id="overall-label" class="statusbar__label"></span>
+    </footer>
+  </main>
+</div>
+
+<!-- ------------------------------------------------------- selection bar -->
+<div id="selection-bar" class="selection-bar" hidden>
+  <span id="selection-count" class="selection-bar__count"></span>
+  <button id="sel-actions" class="btn btn--primary" type="button">Actions…</button>
+  <button id="sel-clear" class="btn btn--ghost" type="button">Clear</button>
+</div>
+
+<!-- --------------------------------------------------------------- hosts -->
+<div id="toasts" class="toasts" role="region" aria-live="polite" aria-label="Notifications"></div>
+<div id="modal-root"></div>
+<div id="menu-root"></div>
+
+<noscript>
+  <p style="padding:2rem;font:16px system-ui">readerHelper needs JavaScript enabled.</p>
+</noscript>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

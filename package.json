@@ -1,0 +1,11 @@
+{
+  "name": "readerhelper",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Kanban reading tracker wired to Zotero and Todoist.",
+  "scripts": {
+    "sync": "node scripts/nightly_sync.mjs",
+    "check": "node scripts/check.mjs"
+  }
+}

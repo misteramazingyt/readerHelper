@@ -1,0 +1,7 @@
+node_modules/
+package-lock.json
+scratch/
+.DS_Store
+Thumbs.db
+*.local
+secrets.json
