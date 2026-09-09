@@ -1,0 +1,19 @@
+name = "readerhelper-auth"
+main = "src/worker.js"
+compatibility_date = "2025-01-01"
+
+# Public, non-secret configuration. The client SECRET is never here --
+# set it with:  wrangler secret put GITHUB_CLIENT_SECRET
+[vars]
+# From your GitHub OAuth App (Settings -> Developer settings -> OAuth Apps).
+GITHUB_CLIENT_ID = ""
+
+# Comma-separated GitHub logins permitted to use this instance.
+ALLOWED_LOGINS = "misteramazingyt"
+
+# Comma-separated origins allowed to call this worker. Keep this tight:
+# it is what stops another site from using your worker as a free OAuth backend.
+ALLOWED_ORIGINS = "https://misteramazingyt.github.io,http://localhost:8000,http://127.0.0.1:8000"
+
+# Keep the worker off the public workers.dev subdomain once a route is set up.
+# workers_dev = false

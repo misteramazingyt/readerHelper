@@ -108,8 +108,9 @@ for (const file of files) {
   for (const m of src.matchAll(/\bbyId\(\s*['"]([^'"]+)['"]\s*\)/g)) referencedIds.add(m[1]);
 }
 const htmlIds = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
-// Hosts are created on demand by ui.js, so they are allowed to be absent.
-const createdAtRuntime = new Set(['busy-overlay']);
+// Created on demand rather than declared in the markup: ui.js builds the busy
+// overlay, and auth.js builds the lock screen before the app is revealed.
+const createdAtRuntime = new Set(['busy-overlay', 'lock-root']);
 for (const id of referencedIds) {
   if (!htmlIds.has(id) && !createdAtRuntime.has(id)) {
     problems.push(`index.html: no element with id="${id}", but JS looks it up`);

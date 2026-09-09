@@ -34,12 +34,16 @@ jobs:
         run: node scripts/test-store.mjs
       - name: Zotero ingest tests
         run: node scripts/test-ingest.mjs
+      - name: Auth worker tests
+        run: node scripts/test-worker.mjs
       - name: Install jsdom
         run: npm install --no-save --no-audit --no-fund jsdom
       - name: Boot the app and drive it
         run: node scripts/test-dom.mjs
       - name: Drag and drop
         run: node scripts/test-dnd.mjs
+      - name: Sign-in gate
+        run: node scripts/test-auth.mjs
 
   deploy:
     name: Deploy
@@ -59,6 +63,7 @@ jobs:
         run: |
           mkdir -p _site
           cp -r index.html css js _site/
+          # worker/ and scripts/ are Node-only and never served.
           cp manifest.webmanifest _site/ 2>/dev/null || true
           cp README.md _site/ 2>/dev/null || true
           # Pages runs Jekyll by default, which ignores files beginning with _.

@@ -197,6 +197,93 @@ Local PDF paths come from Zotero's attachment records, resolved against the
 
 ---
 
+## Locking the site
+
+The board is gated behind **Sign in with GitHub**, restricted to a single
+account. Signing in also grants the `gist` scope, so the same session mirrors
+your board — there is no separate PAT to paste.
+
+### What this does and does not do
+
+GitHub Pages serves static files to anyone who asks, so be clear-eyed about it:
+
+* **Protected.** Nobody but you can obtain a token, reach your Gist, or open the
+  board UI in a usable state. The allowlist is enforced *inside the Worker*,
+  which holds the client secret — a refused login gets a 403 and its
+  freshly-issued token is revoked on the way out.
+* **Not protected.** `index.html` and `js/*.js` remain publicly fetchable, as
+  does this repository. A client-side gate cannot change that.
+
+That distinction is usually fine here, because the deployed site is an empty
+shell: your reading list lives in your browser and your own private Gist, never
+on the server. If you need the *files* hidden too, that requires a host that
+authenticates before serving — Cloudflare Access in front of Cloudflare Pages,
+for instance.
+
+### Why a Worker is needed at all
+
+GitHub OAuth Apps support neither PKCE nor CORS on the token endpoint, so the
+code-for-token exchange cannot happen in a browser. `worker/` is a ~200-line
+Cloudflare Worker that does only that, and holds the only secret in the system.
+
+### Setup, once
+
+**1. Create the OAuth App** — <https://github.com/settings/developers> →
+*New OAuth App*:
+
+| Field | Value |
+|---|---|
+| Application name | readerHelper |
+| Homepage URL | `https://misteramazingyt.github.io/readerHelper/` |
+| Authorization callback URL | `https://misteramazingyt.github.io/readerHelper/` |
+
+Generate a client secret and keep the tab open.
+
+**2. Deploy the Worker**
+
+```bash
+cd worker
+npm install -g wrangler        # once
+wrangler login
+# put the client ID in wrangler.toml -> [vars] GITHUB_CLIENT_ID
+wrangler secret put GITHUB_CLIENT_SECRET   # paste the secret; it goes nowhere else
+wrangler deploy
+```
+
+Note the deployed URL. Check it with
+`curl https://<your-worker>.workers.dev/health` — it should report
+`configured: true` without echoing anything sensitive.
+
+**3. Point the app at it** — in [`js/auth-config.js`](js/auth-config.js):
+
+```js
+clientId: 'Iv1.xxxxxxxxxxxx',
+workerUrl: 'https://readerhelper-auth.<subdomain>.workers.dev',
+```
+
+Commit and push. The next deploy is locked.
+
+Until step 3 is done the deployed site shows a *setup required* screen rather
+than opening to the world, and `localhost` stays open so development is not
+blocked.
+
+### Adjusting it
+
+| Want | Change |
+|---|---|
+| Add a person | `ALLOWED_LOGINS` in `wrangler.toml` **and** `allowedLogins` in `auth-config.js`, then redeploy both |
+| Login without Gist access | `scope: ''` in `auth-config.js`; keep pasting a PAT in Settings |
+| Deliberately open instance | `lockWhenUnconfigured: false` |
+| Sign out / revoke | Settings → Account → Sign out |
+
+`ALLOWED_ORIGINS` in `wrangler.toml` is what stops another site using your
+Worker as a free OAuth backend. Keep it to your Pages origin and localhost.
+
+The client ID is public by design and safe to commit; the **client secret** must
+only ever live in `wrangler secret`.
+
+---
+
 ## Sync
 
 **On load** the board refreshes from Zotero if the last sync was over an hour
@@ -292,9 +379,12 @@ js/
   ui.js        toasts, modals, forms, menus
   selection.js cross-project multi-select
   settings.js  keys, archive, help
+  auth.js      the GitHub sign-in gate + lock screen
+  auth-config.js  public OAuth settings (no secrets)
   main.js      wiring
 scripts/       checks, tests, nightly sync
 tools/         readerhelper:// protocol handler
+worker/        Cloudflare Worker: OAuth code-for-token exchange
 ```
 
 `ingest.js` is deliberately split into `buildPlan` (async, all the network) and
@@ -316,11 +406,13 @@ Or push to `main` and set Pages → Source → **GitHub Actions**.
 ## Tests
 
 ```
-node scripts/check.mjs         19 modules — imports and element ids resolve
+node scripts/check.mjs         21 modules — imports and element ids resolve
 node scripts/test-store.mjs    22 tests   — board model, linked duplicates, undo
 node scripts/test-ingest.mjs   12 tests   — Zotero import shape, sync safety
+node scripts/test-worker.mjs   16 tests   — the auth worker: allowlist, CORS, secret handling
 node scripts/test-dom.mjs      29 tests   — boots the real app in jsdom and drives it
 node scripts/test-dnd.mjs      13 tests   — synthesises pointer drags over a fake layout
+node scripts/test-auth.mjs     24 tests   — every outcome of the sign-in gate
 ```
 
 The last two need `npm install --no-save jsdom`, and skip themselves politely if
@@ -339,6 +431,12 @@ the real `dnd.js`: the movement threshold, the insertion index, multi-select
 drags, column and sidebar reordering, and the touch long-press that keeps
 columns scrollable.
 
-Both suites are mutation-checked: breaking the drag threshold, the drop index,
-the selection carry, or the touch grip each fails exactly the test that covers
-it. All five run in CI before every deploy.
+`test-auth.mjs` gives each scenario its own jsdom and a fresh import of
+`auth.js`, stubbing the Worker at `fetch` so the paths that matter can actually
+be exercised: a forged `state`, a refused account, an expired token, an offline
+revalidation.
+
+The suites are mutation-checked. Breaking the drag threshold, the drop index,
+the selection carry, the touch grip, the CSRF `state` check, the allowlist (in
+either the app or the Worker), the 401 handling, or the CORS origin check each
+fails exactly the test that covers it. All seven run in CI before every deploy.

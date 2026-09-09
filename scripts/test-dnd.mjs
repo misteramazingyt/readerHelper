@@ -28,7 +28,7 @@ try {
 const html = readFileSync(join(root, 'index.html'), 'utf8')
   .replace(/<script type="module"[\s\S]*?<\/script>/g, '');
 
-const dom = new JSDOM(html, { url: 'https://example.test/', pretendToBeVisual: true });
+const dom = new JSDOM(html, { url: 'http://localhost:8000/', pretendToBeVisual: true });
 const { window } = dom;
 const define = (o, n, v) => Object.defineProperty(o, n, { value: v, writable: true, configurable: true });
 

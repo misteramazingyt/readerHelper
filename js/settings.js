@@ -12,6 +12,7 @@ import * as gist from './gist.js';
 import { allItems } from './store.js';
 import { itemProgress } from './model.js';
 import { pct } from './nlp.js';
+import * as auth from './auth.js';
 
 export function openSettings() {
   const cfg = store.getSettings();
@@ -20,6 +21,8 @@ export function openSettings() {
     width: 'wide',
     render: (body, close) => {
       const form = el('form', 'settings');
+
+      form.append(accountSection(close));
 
       form.append(
         section('Zotero', 'Create a key at zotero.org/settings/keys with read access — and write access if you want the read tag applied.', [
@@ -69,14 +72,16 @@ export function openSettings() {
           field('githubToken', 'GitHub token', cfg.githubToken, {
             type: 'password',
             autocomplete: 'off',
-            hint: 'A fine-grained PAT with Gist read/write. Nothing else is needed.',
+            hint: auth.isSignedIn() && auth.hasGistScope()
+              ? 'Optional. Your signed-in session already grants Gist access; a token here overrides it.'
+              : 'A fine-grained PAT with Gist read/write. Nothing else is needed.',
           }),
           field('gistId', 'Gist ID', cfg.gistId, { hint: 'Leave blank and press Push to create one.' }),
         ], [
           button('Push now', async (values) => {
             const busy = showBusy('Pushing to Gist…');
             try {
-              const res = await gist.pushState(values, store.exportState());
+              const res = await gist.pushState(auth.withGithubToken(values), store.exportState());
               busy.done();
               store.saveSettings({ gistId: res.gistId });
               store.setMeta({ lastGistPush: res.pushedAt });
@@ -98,7 +103,7 @@ export function openSettings() {
             if (!ok?.confirmed) return;
             const busy = showBusy('Pulling from Gist…');
             try {
-              const res = await gist.pullState(values);
+              const res = await gist.pullState(auth.withGithubToken(values));
               busy.done();
               store.replaceState(res.state, 'pull from gist');
               toast('Board replaced from the Gist.', { type: 'success' });
@@ -220,6 +225,60 @@ export function openSettings() {
       }
     },
   });
+}
+
+/** Who is signed in, and the way out. Absent entirely on an open instance. */
+function accountSection(close) {
+  const wrap = el('div', 'settings__section');
+  wrap.appendChild(el('h3', 'settings__heading', 'Account'));
+
+  if (!auth.isConfigured()) {
+    wrap.appendChild(el('p', 'settings__blurb',
+      'Sign-in is not configured for this build, so the board is open to anyone who has the URL. See README → Locking the site.'));
+    return wrap;
+  }
+
+  const session = auth.getSession();
+  if (!session) {
+    wrap.appendChild(el('p', 'settings__blurb', 'Not signed in.'));
+    return wrap;
+  }
+
+  const row = el('div', 'account');
+  if (session.avatarUrl) {
+    const img = document.createElement('img');
+    img.className = 'account__avatar';
+    img.src = session.avatarUrl;
+    img.alt = '';
+    img.width = 34;
+    img.height = 34;
+    row.appendChild(img);
+  }
+
+  const info = el('div', 'account__info');
+  info.appendChild(el('span', 'account__login', session.name ? `${session.name} (${session.login})` : session.login));
+  const bits = [];
+  if (session.signedInAt) bits.push(`signed in ${new Date(session.signedInAt).toLocaleDateString()}`);
+  bits.push(auth.hasGistScope() ? 'Gist access granted' : 'identity only');
+  info.appendChild(el('span', 'account__meta', bits.join(' · ')));
+  row.appendChild(info);
+
+  const out = el('button', 'btn btn--ghost', 'Sign out');
+  out.type = 'button';
+  out.addEventListener('click', async () => {
+    const ok = await confirmDialog({
+      title: 'Sign out?',
+      message: 'The session token is revoked at GitHub. Your board stays in this browser.',
+      confirmLabel: 'Sign out',
+    });
+    if (!ok?.confirmed) return;
+    close(null);
+    await auth.signOut();
+  });
+  row.appendChild(out);
+
+  wrap.appendChild(row);
+  return wrap;
 }
 
 function section(title, blurb, fields, buttons = []) {

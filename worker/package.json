@@ -1,0 +1,13 @@
+{
+  "name": "readerhelper-auth-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "GitHub OAuth code-for-token exchange for readerHelper.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "secret": "wrangler secret put GITHUB_CLIENT_SECRET"
+  }
+}

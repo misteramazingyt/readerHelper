@@ -12,11 +12,20 @@ import { initPalette, openPalette } from './palette.js';
 import { openSettings, openArchive, openHelp, applyTheme } from './settings.js';
 import { toast, closeContextMenu, errorToast } from './ui.js';
 import * as gist from './gist.js';
+import * as auth from './auth.js';
 
 const GIST_DEBOUNCE_MS = 8000;
 let gistTimer = null;
 
-function boot() {
+async function boot() {
+  // Nothing renders until the sign-in gate is satisfied. When the build has no
+  // OAuth app configured this either opens (localhost) or shows the setup
+  // screen, so a public deploy is never accidentally left open.
+  if (!(await auth.gate())) return;
+
+  const appEl = document.getElementById('app');
+  if (appEl) appEl.hidden = false;
+
   const hadState = store.loadFromDisk();
   applyTheme();
   render.initRender();
@@ -243,7 +252,13 @@ function positionOf(state, placementId) {
 
 function gistConfigured() {
   const cfg = store.getSettings();
-  return Boolean(cfg.gistSyncEnabled && cfg.githubToken);
+  // Either a PAT pasted in Settings or the token from signing in will do.
+  return Boolean(cfg.gistSyncEnabled && auth.githubToken(cfg));
+}
+
+/** Settings for the Gist client, with the session token folded in. */
+function gistCfg() {
+  return auth.withGithubToken(store.getSettings());
 }
 
 /** Debounced so a burst of edits results in one upload, not twenty. */
@@ -258,7 +273,7 @@ function scheduleGistPush() {
 
 async function pushToGist({ quiet = false } = {}) {
   if (!gistConfigured()) return;
-  const cfg = store.getSettings();
+  const cfg = gistCfg();
   setSyncIndicator('syncing');
   try {
     const res = await gist.pushState(cfg, store.exportState());
@@ -277,7 +292,7 @@ async function pushToGist({ quiet = false } = {}) {
  * diverged — ask, rather than picking a winner silently.
  */
 async function pullFromGistOnLoad() {
-  const cfg = store.getSettings();
+  const cfg = gistCfg();
   if (!gistConfigured() || !cfg.gistId) return;
   setSyncIndicator('syncing');
   try {
@@ -314,8 +329,18 @@ function byId(id) {
   return document.getElementById(id);
 }
 
+function start() {
+  boot().catch((err) => {
+    console.error('readerHelper failed to start', err);
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      '<p style="padding:2rem;font:14px system-ui">readerHelper failed to start. See the browser console.</p>',
+    );
+  });
+}
+
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', boot);
+  document.addEventListener('DOMContentLoaded', start);
 } else {
-  boot();
+  start();
 }

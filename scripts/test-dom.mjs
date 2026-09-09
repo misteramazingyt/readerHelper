@@ -30,7 +30,7 @@ const html = readFileSync(join(root, 'index.html'), 'utf8')
   // The module script is loaded by Node below, not by jsdom.
   .replace(/<script type="module"[\s\S]*?<\/script>/g, '');
 
-const dom = new JSDOM(html, { url: 'https://example.test/', pretendToBeVisual: true });
+const dom = new JSDOM(html, { url: 'http://localhost:8000/', pretendToBeVisual: true });
 const { window } = dom;
 
 const consoleErrors = [];
