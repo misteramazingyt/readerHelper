@@ -265,7 +265,15 @@ Commit and push. The next deploy is locked.
 
 Until step 3 is done the deployed site shows a *setup required* screen rather
 than opening to the world, and `localhost` stays open so development is not
-blocked.
+blocked. If you need the deployed board before finishing setup, run this once in
+the browser console:
+
+```js
+localStorage.setItem('readerHelper.auth.devBypass', '1'); location.reload();
+```
+
+That escape hatch works **only** while no OAuth app is configured — once
+`clientId` is set it is ignored, and there is a test asserting exactly that.
 
 ### Adjusting it
 
@@ -412,7 +420,7 @@ node scripts/test-ingest.mjs   12 tests   — Zotero import shape, sync safety
 node scripts/test-worker.mjs   16 tests   — the auth worker: allowlist, CORS, secret handling
 node scripts/test-dom.mjs      29 tests   — boots the real app in jsdom and drives it
 node scripts/test-dnd.mjs      13 tests   — synthesises pointer drags over a fake layout
-node scripts/test-auth.mjs     24 tests   — every outcome of the sign-in gate
+node scripts/test-auth.mjs     26 tests   — every outcome of the sign-in gate
 ```
 
 The last two need `npm install --no-save jsdom`, and skip themselves politely if

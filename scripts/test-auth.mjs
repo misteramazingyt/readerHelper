@@ -166,6 +166,21 @@ await check('lockWhenUnconfigured:false deliberately opens an instance', async (
   eq(await w.auth.gate(), true, 'gate allowed');
 });
 
+await check('the dev bypass opens an unconfigured instance', async () => {
+  const w = await world();
+  w.local.set('readerHelper.auth.devBypass', '1');
+  eq(await w.auth.gate(), true, 'gate allowed');
+});
+
+await check('the dev bypass does NOT survive once OAuth is configured', async () => {
+  const w = await world({
+    config: { clientId: 'Iv1.test123', workerUrl: 'https://auth.example.workers.dev' },
+  });
+  w.local.set('readerHelper.auth.devBypass', '1');
+  eq(await w.auth.gate(), false, 'still gated');
+  ok(w.window.document.querySelector('.lock__button'), 'sign-in still required');
+});
+
 // --- configured, signed out
 
 const CONFIGURED = { clientId: 'Iv1.test123', workerUrl: 'https://auth.example.workers.dev' };
