@@ -19,7 +19,9 @@ import {
 import * as todoist from './todoist.js';
 import * as zotero from './zotero.js';
 import * as opener from './open.js';
-import { lookupAny } from './metadata.js';
+import * as metadata from './metadata.js';
+import * as bib from './bibliography.js';
+import { AUTH } from './auth-config.js';
 import { parseReading, resolveReading, prettyField, pct, fuzzyScore } from './nlp.js';
 import * as sel from './selection.js';
 
@@ -27,14 +29,99 @@ const READ_TAG_DEFAULT = 'read';
 
 // =============================================================== book dialogs
 
-/** The "+" at the bottom of a column: manual entry or DOI/ISBN import. */
+/**
+ * The "+" at the bottom of a column.
+ *
+ * The identifier field resolves itself: paste a DOI, ISBN, arXiv id, or a
+ * Google Books / archive.org / Open Library link and the rest fills in. Only
+ * blank fields are written, so anything typed by hand survives a later lookup.
+ */
 export async function promptAddBook(groupId) {
+  let resolved = null;      // the record the fields were filled from
+  let lastLookedUp = '';    // avoids re-running for the same text
+  let inFlight = null;      // so a fast typist cannot race two lookups
+
+  const runLookup = async (raw, api, { quiet = false } = {}) => {
+    const text = String(raw || '').trim();
+    if (!text || text === lastLookedUp) return resolved;
+    const { kind, label } = metadata.detect(text);
+    if (kind === 'empty' || kind === 'unknown') return null;
+    // Free text is only searched deliberately, not while still being typed.
+    if (kind === 'query' && quiet) {
+      api.setStatus('Press Enter to search for this title.', 'info');
+      return null;
+    }
+
+    lastLookedUp = text;
+    api.setStatus(`Looking up ${label}…`, 'busy');
+    inFlight?.abort?.();
+    const controller = new AbortController();
+    inFlight = controller;
+
+    try {
+      const { record, candidates } = await metadata.resolve(text, {
+        signal: controller.signal,
+        // Adds Google Scholar to title searches, but only if the worker has a
+        // SerpAPI key; without one it answers 501 and is quietly skipped.
+        scholarUrl: AUTH.workerUrl || null,
+      });
+      let chosen = record;
+      if (!chosen && candidates.length) {
+        api.setStatus(`${candidates.length} matches — choose one.`, 'info');
+        chosen = await pickCandidate(candidates);
+        if (!chosen) {
+          api.setStatus('No match chosen.', 'info');
+          return null;
+        }
+      }
+      if (!chosen) {
+        api.setStatus('Nothing found.', 'warn');
+        return null;
+      }
+
+      resolved = chosen;
+      const filled = api.fillEmpty({
+        title: [chosen.title, chosen.subtitle].filter(Boolean).join(': '),
+        authors: chosen.authors.join(', '),
+        year: chosen.year,
+        totalPages: chosen.totalPages,
+        url: chosen.url,
+      });
+      api.setStatus(
+        filled.length
+          ? `Found via ${chosen.source}: ${truncate(chosen.title, 52)}`
+          : `Found via ${chosen.source}, but every field is already filled in.`,
+        'ok',
+      );
+      return chosen;
+    } catch (err) {
+      if (err.name === 'AbortError') return null;
+      lastLookedUp = '';   // let a retry happen
+      api.setStatus(err.message, 'error');
+      return null;
+    } finally {
+      if (inFlight === controller) inFlight = null;
+    }
+  };
+
   const values = await openForm({
     title: 'Add a book',
     submitLabel: 'Add',
-    intro: 'Enter a DOI or ISBN and press Look up, or fill the fields in by hand.',
+    intro: 'Paste a DOI, ISBN, arXiv id, or a Google Books / archive.org / Open Library link — the rest fills itself in. Or type a title and press Enter to search. Everything can also be entered by hand.',
+    beforeSubmit: async (v, api) => {
+      // The old behaviour here was to refuse with "Title is required" while an
+      // identifier sat unresolved in the field above. Resolve it instead.
+      if (!v.title && v.identifier) await runLookup(v.identifier, api, { quiet: false });
+      return true;
+    },
     fields: [
-      { name: 'identifier', label: 'DOI or ISBN', placeholder: '10.1093/… or 9780674… ', autofocus: true },
+      {
+        name: 'identifier',
+        label: 'DOI, ISBN, arXiv, or link',
+        placeholder: '9780804011662 · 10.1086/230209 · archive.org/details/… · books.google.com/…',
+        autofocus: true,
+        onInput: (value, api) => runLookup(value, api, { quiet: true }),
+      },
       { name: 'title', label: 'Title', required: true },
       { name: 'authors', label: 'Authors', hint: 'Comma-separated.' },
       { name: 'year', label: 'Year', type: 'number' },
@@ -45,52 +132,74 @@ export async function promptAddBook(groupId) {
     ],
     extraActions: [
       {
+        // Lookup is automatic; this is for retrying after a rate limit, and
+        // for forcing a title search without pressing Enter in the field.
         label: 'Look up',
-        onClick: async (readValues, _close, controls) => {
-          const { identifier } = readValues();
-          if (!identifier) {
-            toast('Enter a DOI or ISBN first.', { type: 'error' });
-            return;
-          }
-          const busy = showBusy('Looking up…');
-          try {
-            const meta = await lookupAny(identifier);
-            const set = (name, v) => {
-              const c = controls.get(name);
-              if (c && v != null && v !== '') c.input.value = v;
-            };
-            set('title', meta.title);
-            set('authors', (meta.authors || []).join(', '));
-            set('year', meta.year);
-            set('totalPages', meta.totalPages);
-            set('url', meta.url);
-            if (meta.doi) controls.get('identifier').input.value = meta.doi;
-            toast(`Found via ${meta.source}.`, { type: 'success' });
-          } catch (err) {
-            errorToast(err, 'Lookup failed');
-          } finally {
-            busy.done();
-          }
+        onClick: async (readValues, _close, _controls, api) => {
+          lastLookedUp = '';
+          await runLookup(readValues().identifier, api, { quiet: false });
         },
       },
     ],
   });
   if (!values) return null;
 
-  const identifier = values.identifier || '';
+  // Anything the lookup found but the form has no field for is worth keeping.
+  const detected = metadata.detect(values.identifier || '');
   const created = store.addItem(groupId, {
     title: values.title,
     authors: splitAuthors(values.authors),
     year: values.year || null,
-    doi: /^10\./.test(identifier) ? identifier : null,
-    isbn: /^\d/.test(identifier) && !/^10\./.test(identifier) ? identifier.replace(/[\s-]/g, '') : null,
-    url: values.url || null,
+    doi: resolved?.doi || (detected.kind === 'doi' ? detected.value : null),
+    isbn: resolved?.isbn || (detected.kind === 'isbn' ? detected.value : null),
+    url: values.url || resolved?.url || null,
     totalPages: values.totalPages || null,
     totalChapters: values.totalChapters || null,
     tag: values.tag || null,
+    itemType: resolved?.itemType || 'book',
+    publisher: resolved?.publisher || null,
+    container: resolved?.container || null,
+    pages: resolved?.pages || null,
+    volume: resolved?.volume || null,
+    issue: resolved?.issue || null,
+    abstract: resolved?.abstract || null,
   });
-  toast(`Added “${values.title}”.`, { type: 'success' });
+  toast(`Added “${truncate(values.title, 44)}”.`, { type: 'success' });
   return created;
+}
+
+/** Let the user choose when a title search returns several plausible works. */
+function pickCandidate(candidates) {
+  return openModal({
+    title: 'Which one?',
+    width: 'wide',
+    render: (body, close) => {
+      const list = el('div', 'picker__list picker__list--tall');
+      candidates.forEach((c, i) => {
+        const btn = el('button', `picker__row candidate${i === 0 ? ' is-active' : ''}`);
+        btn.type = 'button';
+        const main = el('div', 'candidate__main');
+        main.append(
+          el('span', 'candidate__title', [c.title, c.subtitle].filter(Boolean).join(': ')),
+          el('span', 'candidate__meta', [
+            c.authors.slice(0, 3).join(', '),
+            c.year,
+            c.container || c.publisher,
+            c.totalPages ? `${c.totalPages} pp` : null,
+          ].filter(Boolean).join(' · ')),
+        );
+        btn.append(main, el('span', 'candidate__source', c.source));
+        btn.addEventListener('click', () => close(c));
+        list.appendChild(btn);
+      });
+      body.appendChild(list);
+
+      const none = el('button', 'btn btn--ghost', 'None of these — enter by hand');
+      none.type = 'button';
+      none.addEventListener('click', () => close(null));
+      body.appendChild(none);
+    },
+  });
 }
 
 export async function promptEditBook(itemId) {
@@ -660,6 +769,171 @@ export async function markReadFlow(placementIds) {
   await markItemsRead(itemIds, { tagZotero: answer.tagZotero });
 }
 
+// ====================================================== bibliography export
+
+/** Distinct, non-archived items behind a set of placements. */
+export function itemsOfPlacements(placementIds) {
+  const state = store.getState();
+  const seen = new Set();
+  const out = [];
+  for (const pid of placementIds) {
+    const p = state.placements[pid];
+    const item = p && state.items[p.itemId];
+    if (!item || seen.has(item.id)) continue;
+    seen.add(item.id);
+    out.push(item);
+  }
+  return out;
+}
+
+export function itemsOfGroup(groupId, { includeArchived = false } = {}) {
+  const state = store.getState();
+  const g = state.groups[groupId];
+  if (!g) return [];
+  return itemsOfPlacements(g.placementOrder).filter((i) => includeArchived || !i.archived);
+}
+
+export function itemsOfProject(projectId, { includeArchived = false } = {}) {
+  const state = store.getState();
+  const prj = state.projects[projectId];
+  if (!prj) return [];
+  const seen = new Set();
+  const out = [];
+  for (const gid of prj.groupOrder) {
+    for (const item of itemsOfGroup(gid, { includeArchived })) {
+      if (seen.has(item.id)) continue;   // a linked copy in two groups counts once
+      seen.add(item.id);
+      out.push(item);
+    }
+  }
+  return out;
+}
+
+/**
+ * The export dialog: pick a format, see it, copy or download it. Regenerates
+ * on every format change so what is on screen is always what gets saved.
+ */
+export async function exportBibliography(items, label = 'bibliography') {
+  if (!items.length) {
+    toast('Nothing to export.', { type: 'error' });
+    return null;
+  }
+  const settings = store.getSettings();
+  const canZotero = Boolean(settings.zoteroApiKey && settings.zoteroUserId)
+    && items.some((i) => i.zoteroKey);
+
+  return openModal({
+    title: `Export bibliography — ${items.length} item${items.length === 1 ? '' : 's'}`,
+    width: 'wide',
+    render: (body, close) => {
+      const controls = el('div', 'export__controls');
+
+      const formatSel = document.createElement('select');
+      formatSel.className = 'export__format';
+      for (const [key, spec] of Object.entries(bib.FORMATS)) {
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.textContent = spec.label;
+        formatSel.appendChild(opt);
+      }
+      formatSel.value = settings.bibFormat || 'bibtex';
+
+      const zoteroWrap = el('label', 'export__toggle');
+      const zoteroBox = document.createElement('input');
+      zoteroBox.type = 'checkbox';
+      zoteroBox.checked = canZotero;
+      zoteroBox.disabled = !canZotero;
+      zoteroWrap.append(zoteroBox, el('span', null, canZotero
+        ? 'Use Zotero for linked items'
+        : 'Use Zotero (no linked items, or not configured)'));
+
+      const formatLabel = el('label', 'export__label', 'Format');
+      formatLabel.htmlFor = 'export-format';
+      formatSel.id = 'export-format';
+      controls.append(formatLabel, formatSel, zoteroWrap);
+      body.appendChild(controls);
+
+      const notes = el('div', 'export__notes');
+      notes.hidden = true;
+      body.appendChild(notes);
+
+      const output = document.createElement('textarea');
+      output.className = 'export__output';
+      output.rows = 16;
+      output.spellcheck = false;
+      output.readOnly = true;
+      body.appendChild(output);
+
+      const actionsRow = el('div', 'form__actions');
+      const copyBtn = el('button', 'btn btn--ghost', 'Copy');
+      copyBtn.type = 'button';
+      const downloadBtn = el('button', 'btn btn--primary', 'Download');
+      downloadBtn.type = 'button';
+      const closeBtn = el('button', 'btn btn--ghost', 'Close');
+      closeBtn.type = 'button';
+      closeBtn.addEventListener('click', () => close(null));
+      actionsRow.append(el('div', 'form__spacer'), closeBtn, copyBtn, downloadBtn);
+      body.appendChild(actionsRow);
+
+      let current = { text: '', format: formatSel.value };
+      let generation = 0;
+
+      const regenerate = async () => {
+        const mine = (generation += 1);
+        const format = formatSel.value;
+        output.value = 'Generating…';
+        notes.hidden = true;
+        try {
+          const result = await bib.buildBibliography(items, {
+            format,
+            settings,
+            useZotero: zoteroBox.checked,
+            onProgress: (m) => { if (mine === generation) output.value = m; },
+          });
+          if (mine !== generation) return;   // a later format change won
+          current = result;
+          output.value = result.text || '(empty)';
+          if (result.notes.length) {
+            notes.hidden = false;
+            notes.textContent = result.notes.join(' ');
+          }
+        } catch (err) {
+          if (mine !== generation) return;
+          output.value = '';
+          notes.hidden = false;
+          notes.textContent = err.message;
+        }
+      };
+
+      formatSel.addEventListener('change', () => {
+        store.saveSettings({ bibFormat: formatSel.value });
+        regenerate();
+      });
+      zoteroBox.addEventListener('change', regenerate);
+
+      copyBtn.addEventListener('click', () => {
+        opener.copyText(current.text);
+        toast('Bibliography copied.', { type: 'success' });
+      });
+
+      downloadBtn.addEventListener('click', () => {
+        const spec = bib.FORMATS[current.format] || bib.FORMATS.bibtex;
+        const blob = new Blob([current.text], { type: `${spec.mime};charset=utf-8` });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = bib.filenameFor(label, current.format);
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+        toast(`Saved ${bib.filenameFor(label, current.format)}.`, { type: 'success' });
+      });
+
+      regenerate();
+    },
+  });
+}
+
 // ============================================================ context menus
 
 /** Menu for one card, or for the whole selection when the card is part of it. */
@@ -688,6 +962,10 @@ export function openBookMenu(x, y, placementId) {
     },
     { separator: true },
     { label: 'Add task to Todoist…', onClick: () => promptTodoistTaskForItem(itemIds) },
+    {
+      label: many ? `Export bibliography (${itemIds.length})…` : 'Export bibliography…',
+      onClick: () => exportBibliography(itemsOfPlacements(ids), many ? `${itemIds.length}-books` : item.title),
+    },
     { label: many ? 'Duplicate all' : 'Duplicate', hint: 'linked copy', onClick: () => duplicateBooks(ids) },
     { label: 'Move to…', onClick: () => moveBooks(ids) },
     { label: 'Copy to…', hint: 'linked copy', onClick: () => copyBooks(ids) },
@@ -729,6 +1007,7 @@ export function openGroupMenu(x, y, groupId) {
     { label: 'Add book…', onClick: () => promptAddBook(groupId) },
     { separator: true },
     { label: 'Add to Todoist…', hint: 'Inbox', onClick: () => promptTodoistTaskForContainer(group.name, 'group') },
+    { label: 'Export bibliography…', onClick: () => exportBibliography(itemsOfGroup(groupId), group.name) },
     { label: 'Duplicate', onClick: () => { store.duplicateGroup(groupId); toast('Group duplicated.'); } },
     {
       label: 'Move to…',
@@ -760,6 +1039,7 @@ export function openProjectMenu(x, y, projectId) {
     { separator: true },
     { label: 'Add to Todoist…', hint: 'Inbox', onClick: () => promptTodoistTaskForContainer(project.name, 'project') },
     { label: 'Mirror to Todoist', hint: 'project + sections', onClick: () => mirrorProjectToTodoist(projectId) },
+    { label: 'Export bibliography…', hint: 'whole project', onClick: () => exportBibliography(itemsOfProject(projectId), project.name) },
     { label: 'Duplicate', onClick: () => { store.duplicateProject(projectId); toast('Project duplicated.'); } },
     { separator: true },
     { label: 'Delete project', danger: true, onClick: () => deleteProjectFlow(projectId) },

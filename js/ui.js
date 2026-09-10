@@ -166,7 +166,10 @@ function trapFocus(container, e) {
  *          rows, min, max, step, autofocus }
  * type: text | textarea | number | select | checkbox | tags | static | password
  */
-export function openForm({ title, fields, submitLabel = 'Save', cancelLabel = 'Cancel', width, intro, validate, extraActions }) {
+export function openForm({
+  title, fields, submitLabel = 'Save', cancelLabel = 'Cancel', width, intro,
+  validate, extraActions, beforeSubmit, onReady,
+}) {
   return openModal({
     title,
     width,
@@ -181,6 +184,17 @@ export function openForm({ title, fields, submitLabel = 'Save', cancelLabel = 'C
         p.textContent = intro;
         form.appendChild(p);
       }
+
+      // A shared status line: forms that look things up need somewhere to
+      // report progress that is not a toast and not a field error.
+      const status = document.createElement('div');
+      status.className = 'form__status';
+      status.hidden = true;
+      status.setAttribute('role', 'status');
+      form.appendChild(status);
+
+      // Filled in once the controls exist; handed to onInput and beforeSubmit.
+      const api = {};
 
       const controls = new Map();
       for (const field of fields) {
@@ -259,6 +273,28 @@ export function openForm({ title, fields, submitLabel = 'Save', cancelLabel = 'C
         form.appendChild(row);
         controls.set(field.name, { input, field, err });
         if (field.autofocus) setTimeout(() => input.focus(), 40);
+
+        // Debounced per-field hook, for fields that resolve something as you
+        // type. Also fires on paste and on blur, where waiting is pointless.
+        if (typeof field.onInput === 'function') {
+          let timer = null;
+          const fire = (immediate) => {
+            clearTimeout(timer);
+            const run = () => field.onInput(input.value.trim(), api);
+            if (immediate) run();
+            else timer = setTimeout(run, field.debounce ?? 550);
+          };
+          input.addEventListener('input', () => fire(false));
+          input.addEventListener('paste', () => setTimeout(() => fire(true), 0));
+          input.addEventListener('blur', () => fire(true));
+          input.addEventListener('keydown', (e) => {
+            // Enter in a lookup field means "resolve this", not "submit".
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              fire(true);
+            }
+          });
+        }
       }
 
       const readValues = () => {
@@ -271,6 +307,38 @@ export function openForm({ title, fields, submitLabel = 'Save', cancelLabel = 'C
         return out;
       };
 
+      Object.assign(api, {
+        controls,
+        values: readValues,
+        get: (name) => controls.get(name)?.input.value.trim() ?? '',
+        set: (name, value) => {
+          const c = controls.get(name);
+          if (!c || value == null || value === '') return false;
+          if (c.field.type === 'checkbox') c.input.checked = Boolean(value);
+          else c.input.value = value;
+          return true;
+        },
+        /** Fill only what is still blank, so typed-in edits are never clobbered. */
+        fillEmpty: (patch) => {
+          const filled = [];
+          for (const [name, value] of Object.entries(patch)) {
+            const c = controls.get(name);
+            if (!c || value == null || value === '') continue;
+            if (String(c.input.value).trim()) continue;
+            c.input.value = value;
+            filled.push(name);
+          }
+          return filled;
+        },
+        setStatus: (message, kind = 'info') => {
+          status.hidden = !message;
+          status.textContent = message || '';
+          status.className = `form__status is-${kind}`;
+        },
+        clearStatus: () => { status.hidden = true; status.textContent = ''; },
+        close,
+      });
+
       const footer = document.createElement('div');
       footer.className = 'form__actions';
 
@@ -279,7 +347,7 @@ export function openForm({ title, fields, submitLabel = 'Save', cancelLabel = 'C
         btn.type = 'button';
         btn.className = 'btn btn--ghost';
         btn.textContent = extra.label;
-        btn.addEventListener('click', () => extra.onClick(readValues, close, controls));
+        btn.addEventListener('click', () => extra.onClick(readValues, close, controls, api));
         footer.appendChild(btn);
       }
 
@@ -301,9 +369,26 @@ export function openForm({ title, fields, submitLabel = 'Save', cancelLabel = 'C
       footer.append(cancel, submit);
       form.appendChild(footer);
 
-      form.addEventListener('submit', (e) => {
+      form.addEventListener('submit', async (e) => {
         e.preventDefault();
         for (const { err } of controls.values()) err.hidden = true;
+
+        // A last chance to fill things in — a form that looks data up should
+        // resolve a pending identifier rather than complain that a field it
+        // was about to populate is empty.
+        if (beforeSubmit) {
+          submit.disabled = true;
+          try {
+            const proceed = await beforeSubmit(readValues(), api);
+            if (proceed === false) return;
+          } catch (err) {
+            api.setStatus(err.message, 'error');
+            return;
+          } finally {
+            submit.disabled = false;
+          }
+        }
+
         const values = readValues();
 
         for (const [name, { field, err }] of controls) {
@@ -337,6 +422,7 @@ export function openForm({ title, fields, submitLabel = 'Save', cancelLabel = 'C
       });
 
       body.appendChild(form);
+      onReady?.(api);
     },
   });
 }

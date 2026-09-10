@@ -219,6 +219,112 @@ await check('an unconfigured worker says so rather than failing oddly', async ()
   eq((await res.json()).error, 'not_configured', 'named clearly');
 });
 
+// ------------------------------------------------------------------ scholar
+
+// caches.default does not exist outside the Workers runtime.
+const cacheStore = new Map();
+globalThis.caches = {
+  default: {
+    match: async (req) => cacheStore.get(String(req.url)) || undefined,
+    put: async (req, res) => { cacheStore.set(String(req.url), res); },
+  },
+};
+
+await check('scholar search is off unless a SerpAPI key is set', async () => {
+  const res = await worker.fetch(
+    new Request('https://auth.example.workers.dev/scholar', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: APP_ORIGIN },
+      body: JSON.stringify({ q: 'anything at all' }),
+    }),
+    ENV, { waitUntil: () => {} },
+  );
+  eq(res.status, 501, 'not implemented');
+  const body = await res.json();
+  eq(body.error, 'not_configured', 'says so plainly');
+  ok(body.message.includes('SERPAPI_KEY'), 'names what to set');
+});
+
+await check('scholar results are reshaped from SerpAPI', async () => {
+  cacheStore.clear();
+  let called = '';
+  globalThis.fetch = async (url) => {
+    called = String(url);
+    return new Response(JSON.stringify({
+      organic_results: [{
+        title: 'Attention is all you need',
+        link: 'https://example.org/attention',
+        snippet: 'The dominant sequence transduction models…',
+        publication_info: { summary: 'A Vaswani, N Shazeer, N Parmar - Advances in neural information, 2017 - proceedings.com' },
+        inline_links: { cited_by: { total: 100000 } },
+      }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+
+  const res = await worker.fetch(
+    new Request('https://auth.example.workers.dev/scholar', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: APP_ORIGIN },
+      body: JSON.stringify({ q: 'attention is all you need' }),
+    }),
+    { ...ENV, SERPAPI_KEY: 'serp-secret' }, { waitUntil: (p) => p },
+  );
+  eq(res.status, 200, 'ok');
+  const body = await res.json();
+  eq(body.results.length, 1, 'one result');
+  eq(body.results[0].title, 'Attention is all you need', 'title');
+  eq(body.results[0].authors, ['A Vaswani', 'N Shazeer', 'N Parmar'], 'authors parsed from the summary line');
+  eq(body.results[0].year, 2017, 'year parsed');
+  eq(body.results[0].citedBy, 100000, 'citation count kept');
+  ok(called.includes('engine=google_scholar'), 'asked Scholar');
+});
+
+await check('the SerpAPI key is never returned to the caller', async () => {
+  cacheStore.clear();
+  globalThis.fetch = async () => new Response(JSON.stringify({ organic_results: [] }), { status: 200 });
+  const res = await worker.fetch(
+    new Request('https://auth.example.workers.dev/scholar', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: APP_ORIGIN },
+      body: JSON.stringify({ q: 'a query' }),
+    }),
+    { ...ENV, SERPAPI_KEY: 'serp-secret' }, { waitUntil: (p) => p },
+  );
+  ok(!(await res.text()).includes('serp-secret'), 'no key in the response');
+});
+
+await check('a repeated scholar search is served from cache, not re-billed', async () => {
+  cacheStore.clear();
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ organic_results: [{ title: 'X', publication_info: { summary: 'A B - J, 2001 - x' } }] }), { status: 200 });
+  };
+  const env = { ...ENV, SERPAPI_KEY: 'k' };
+  const send = () => worker.fetch(
+    new Request('https://auth.example.workers.dev/scholar', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: APP_ORIGIN },
+      body: JSON.stringify({ q: 'same query' }),
+    }),
+    env, { waitUntil: (p) => p },
+  );
+  await send();
+  const second = await send();
+  eq(calls, 1, 'SerpAPI hit only once — the free tier is 100 a month');
+  eq((await second.json()).cached, true, 'second answer marked as cached');
+});
+
+await check('a too-short scholar query is rejected before it costs anything', async () => {
+  let calls = 0;
+  globalThis.fetch = async () => { calls += 1; return new Response('{}', { status: 200 }); };
+  const res = await worker.fetch(
+    new Request('https://auth.example.workers.dev/scholar', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: APP_ORIGIN },
+      body: JSON.stringify({ q: 'ab' }),
+    }),
+    { ...ENV, SERPAPI_KEY: 'k' }, { waitUntil: () => {} },
+  );
+  eq(res.status, 400, 'bad request');
+  eq(calls, 0, 'no search performed');
+});
+
 // -------------------------------------------------------------------- health
 
 await check('health reports configuration without revealing it', async () => {

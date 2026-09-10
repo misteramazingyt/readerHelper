@@ -97,6 +97,14 @@ export function newItem(fields = {}) {
     isbn: null,
     url: null,
     itemType: 'book',
+    // Bibliographic detail, kept so a bibliography can be exported without
+    // going back to the network for what a lookup already told us.
+    publisher: null,
+    container: null,   // journal or book title for a chapter
+    volume: null,
+    issue: null,
+    pages: null,       // the range within a container, e.g. "45-71"
+    abstract: null,
     // Zotero linkage
     zoteroKey: null,
     zoteroLibrary: null, // e.g. "users/12345"

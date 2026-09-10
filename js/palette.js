@@ -15,6 +15,7 @@ import { fuzzyScore, parseReading, resolveReading, pct } from './nlp.js';
 import * as actions from './actions.js';
 import * as sync from './sync.js';
 import * as opener from './open.js';
+import * as sel from './selection.js';
 import { toast, el } from './ui.js';
 
 let overlay = null;
@@ -140,6 +141,47 @@ const COMMANDS = [
         actions.promptTodoistTaskForItem([row.id]);
       },
     }),
+  },
+  {
+    id: 'export',
+    slash: '/export',
+    label: 'Export bibliography',
+    hint: 'selection, or this project',
+    run: () => {
+      // A selection is the more specific intent, so it wins when there is one.
+      const selected = sel.getSelection();
+      if (selected.length) {
+        closePalette();
+        actions.exportBibliography(actions.itemsOfPlacements(selected), `${selected.length}-books`);
+        return;
+      }
+      const s = store.getState();
+      const project = s.projects[s.ui.activeProjectId];
+      if (!project) {
+        closePalette();
+        toast('Select a project first.', { type: 'error' });
+        return;
+      }
+      enterPick({
+        command: 'export',
+        prompt: 'Export which group? (Esc for the whole project)',
+        rows: () => [
+          { id: `__project__${project.id}`, label: `Whole project: ${project.name}`, sub: `${actions.itemsOfProject(project.id).length} books` },
+          ...project.groupOrder.map((gid) => {
+            const g = s.groups[gid];
+            return g ? { id: gid, label: g.name, sub: `${actions.itemsOfGroup(gid).length} books` } : null;
+          }).filter(Boolean),
+        ],
+        onPick: (row) => {
+          closePalette();
+          if (row.id.startsWith('__project__')) {
+            actions.exportBibliography(actions.itemsOfProject(project.id), project.name);
+          } else {
+            actions.exportBibliography(actions.itemsOfGroup(row.id), s.groups[row.id]?.name);
+          }
+        },
+      });
+    },
   },
   {
     id: 'goto',

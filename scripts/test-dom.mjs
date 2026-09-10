@@ -75,8 +75,12 @@ window.Element.prototype.releasePointerCapture = function releasePointerCapture(
 window.document.elementFromPoint = () => null;
 define(window, 'crypto', { ...(window.crypto || {}), randomUUID: () => 'test-uuid-0000' });
 define(window.navigator, 'clipboard', { writeText: async () => {} });
-// Any network call in a smoke test is a bug in the test, not the app.
-define(window, 'fetch', async () => { throw new Error('network disabled in smoke test'); });
+// No test here should reach the network by accident, but some features (the
+// identifier lookup, the bibliography export) exist to call it — so the stub is
+// swappable per test rather than a flat refusal.
+let fetchHandler = async () => { throw new Error('network disabled in smoke test'); };
+const setFetch = (fn) => { fetchHandler = fn; };
+define(window, 'fetch', (...args) => fetchHandler(...args));
 define(window, 'CSS', { ...(window.CSS || {}), escape: (s) => String(s).replace(/["\\]/g, '\\$&') });
 window.HTMLCanvasElement.prototype.getContext = () => null;
 
@@ -185,6 +189,7 @@ await check('adding a group renames in place', async () => {
 // Books, via the store rather than the dialog, then check the render.
 const storeMod = await import(pathToFileURL(join(root, 'js', 'store.js')).href);
 const modelMod = await import(pathToFileURL(join(root, 'js', 'model.js')).href);
+const actionsMod = await import(pathToFileURL(join(root, 'js', 'actions.js')).href);
 
 await check('a book renders with tag, progress and open buttons', async () => {
   const s = storeMod.getState();
@@ -416,6 +421,179 @@ await check('the archive view opens', async () => {
   ok($('.modal__title').textContent.startsWith('Archive'), 'archive modal');
   click($('.modal__close'));
   await tick(10);
+});
+
+// -------------------------------------------- identifier lookup and export
+
+await check('the add-book dialog resolves an ISBN without a button press', async () => {
+  setFetch(async (url) => {
+    const u = String(url);
+    if (u.includes('openlibrary.org/api/books')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          'ISBN:9780804011662': {
+            title: 'The Public and Its Problems',
+            authors: [{ name: 'John Dewey' }],
+            publish_date: '1927',
+            number_of_pages: 278,
+            publishers: [{ name: 'Swallow Press' }],
+            url: 'https://openlibrary.org/books/OL1M',
+          },
+        }),
+      };
+    }
+    throw new Error(`unexpected fetch: ${u}`);
+  });
+
+  const s = storeMod.getState();
+  const groupId = s.projects[s.ui.activeProjectId].groupOrder[0];
+  actionsMod.promptAddBook(groupId);
+  await tick(40);
+
+  const idField = $('.modal [name="identifier"]');
+  ok(idField, 'identifier field present');
+  eq($('.modal [name="title"]').value, '', 'title starts empty');
+
+  idField.value = '9780804011662';
+  // blur resolves at once, rather than waiting out the typing debounce
+  idField.dispatchEvent(new window.Event('blur', { bubbles: true }));
+  await tick(80);
+
+  eq($('.modal [name="title"]').value, 'The Public and Its Problems', 'title filled in');
+  eq($('.modal [name="authors"]').value, 'John Dewey', 'authors filled in');
+  eq($('.modal [name="year"]').value, '1927', 'year filled in');
+  eq($('.modal [name="totalPages"]').value, '278', 'page count filled in');
+  ok($('.form__status').textContent.includes('Open Library'), 'says where it came from');
+});
+
+await check('a hand-typed field is not overwritten by a later lookup', async () => {
+  $('.modal [name="title"]').value = 'My Own Title';
+  const idField = $('.modal [name="identifier"]');
+  idField.value = '978-0-8040-1166-2';   // the same book, formatted differently
+  idField.dispatchEvent(new window.Event('blur', { bubbles: true }));
+  await tick(80);
+  eq($('.modal [name="title"]').value, 'My Own Title', 'kept what was typed');
+});
+
+await check('submitting keeps the detail the lookup found', async () => {
+  $('.modal form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await tick(80);
+  ok(!$('.modal'), 'dialog closed');
+  const added = Object.values(storeMod.getState().items).find((i) => i.title === 'My Own Title');
+  ok(added, 'item created');
+  eq(added.isbn, '9780804011662', 'isbn kept');
+  eq(added.publisher, 'Swallow Press', 'publisher carried over');
+  eq(added.totalPages, 278, 'page count carried over');
+});
+
+await check('submitting with ONLY an identifier resolves it instead of refusing', async () => {
+  // This is the case that used to fail with "Title is required" while an
+  // unresolved ISBN sat in the field above it.
+  setFetch(async (url) => {
+    if (String(url).includes('openlibrary.org/api/books')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          'ISBN:9780674724761': {
+            title: 'A Theory of Justice',
+            authors: [{ name: 'John Rawls' }],
+            publish_date: '1971',
+            number_of_pages: 607,
+          },
+        }),
+      };
+    }
+    throw new Error('unexpected fetch');
+  });
+
+  const s = storeMod.getState();
+  actionsMod.promptAddBook(s.projects[s.ui.activeProjectId].groupOrder[0]);
+  await tick(40);
+  // Type the ISBN and submit at once — no blur, no Look up press.
+  $('.modal [name="identifier"]').value = '9780674724761';
+  $('.modal form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await tick(120);
+
+  ok(!$('.modal'), 'the dialog closed rather than showing a validation error');
+  const added = Object.values(storeMod.getState().items).find((i) => i.title === 'A Theory of Justice');
+  ok(added, 'the book was added from the identifier alone');
+  eq(added.totalPages, 607, 'with its page count');
+});
+
+await check('a failed lookup reports itself and does not block manual entry', async () => {
+  setFetch(async () => ({ ok: false, status: 429, json: async () => ({}), text: async () => '' }));
+  const s = storeMod.getState();
+  actionsMod.promptAddBook(s.projects[s.ui.activeProjectId].groupOrder[0]);
+  await tick(40);
+  const idField = $('.modal [name="identifier"]');
+  idField.value = '9780804011662';
+  idField.dispatchEvent(new window.Event('blur', { bubbles: true }));
+  await tick(80);
+  ok($('.form__status').textContent.length > 0, 'said something about it');
+  $('.modal [name="title"]').value = 'Typed By Hand';
+  $('.modal form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await tick(80);
+  ok(Object.values(storeMod.getState().items).some((i) => i.title === 'Typed By Hand'),
+    'manual entry still works when the lookup fails');
+});
+
+await check('Export bibliography appears in the book menu', async () => {
+  setFetch(async () => { throw new Error('offline'); });
+  $('.card').dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 20 }));
+  await tick(20);
+  const items = $$('.context-menu__item').map((n) => n.querySelector('.context-menu__label').textContent);
+  ok(items.includes('Export bibliography…'), `book menu (got ${items.join(' | ')})`);
+  key('Escape');
+  await tick(10);
+});
+
+await check('Export bibliography appears in the group and project menus', async () => {
+  $('.column').dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 30 }));
+  await tick(20);
+  ok($$('.context-menu__item').some((n) => n.textContent.includes('Export bibliography')), 'group menu');
+  key('Escape');
+  await tick(10);
+
+  $('.project-row').dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 30 }));
+  await tick(20);
+  ok($$('.context-menu__item').some((n) => n.textContent.includes('Export bibliography')), 'project menu');
+  key('Escape');
+  await tick(10);
+});
+
+await check('the export dialog produces BibTeX for a whole group', async () => {
+  const s = storeMod.getState();
+  const groupId = s.projects[s.ui.activeProjectId].groupOrder[0];
+  actionsMod.exportBibliography(actionsMod.itemsOfGroup(groupId), 'To read');
+  await tick(120);
+  const out = $('.export__output');
+  ok(out, 'output shown');
+  ok(out.value.includes('@book{') || out.value.includes('@article{'),
+    `bibtex produced (got ${out.value.slice(0, 60)})`);
+  ok($('.export__format'), 'format selector present');
+  ok($$('.btn').some((b) => b.textContent === 'Download'), 'download offered');
+  click($$('.btn').find((b) => b.textContent === 'Close'));
+  await tick(20);
+});
+
+await check('a project export counts a linked copy only once', () => {
+  const s = storeMod.getState();
+  const projectId = s.ui.activeProjectId;
+  const groups = s.projects[projectId].groupOrder;
+  const before = actionsMod.itemsOfProject(projectId).length;
+
+  // The copy has to land in a DIFFERENT group to test the project-level check:
+  // a duplicate inside one group is already collapsed when that group is read.
+  const source = s.groups[groups[0]].placementOrder[0];
+  const otherGroup = groups.find((g) => g !== groups[0]);
+  ok(source && otherGroup, 'fixture has a book and a second group');
+  storeMod.duplicatePlacement(source, otherGroup);
+
+  eq(actionsMod.itemsOfGroup(otherGroup).length >= 1, true, 'the copy is in the other group');
+  eq(actionsMod.itemsOfProject(projectId).length, before, 'but the project still lists it once');
 });
 
 await check('state persisted to localStorage', () => {

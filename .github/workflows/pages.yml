@@ -36,6 +36,8 @@ jobs:
         run: node scripts/test-ingest.mjs
       - name: Auth worker tests
         run: node scripts/test-worker.mjs
+      - name: Citation lookup and bibliography tests
+        run: node scripts/test-citation.mjs
       - name: Install jsdom
         run: npm install --no-save --no-audit --no-fund jsdom
       - name: Boot the app and drive it

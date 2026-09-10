@@ -62,6 +62,9 @@ export default {
     if (url.pathname === '/revoke' && request.method === 'POST') {
       return handleRevoke(request, env, corsOrigin);
     }
+    if (url.pathname === '/scholar' && request.method === 'POST') {
+      return handleScholar(request, env, ctx, corsOrigin);
+    }
 
     return json({ error: 'not_found' }, 404, corsOrigin);
   },
@@ -190,6 +193,107 @@ function revokeToken(env, token) {
     },
     body: JSON.stringify({ access_token: token }),
   });
+}
+
+// ------------------------------------------------------------------ scholar
+
+/**
+ * Optional Google Scholar search, proxied so the SerpAPI key stays here.
+ *
+ * Entirely opt-in: without SERPAPI_KEY this answers 501 and the app simply
+ * carries on with its keyless sources (Crossref, OpenAlex, Google Books), which
+ * cover indexed literature well. Scholar earns its place mainly for grey
+ * literature and older work those miss.
+ *
+ * Responses are cached for a day. The free SerpAPI tier is 100 searches a
+ * month, so repeating a search must not cost a second one.
+ */
+async function handleScholar(request, env, ctx, corsOrigin) {
+  if (!env.SERPAPI_KEY) {
+    return json({
+      error: 'not_configured',
+      message: 'Scholar search is off. Set SERPAPI_KEY on the worker to enable it.',
+    }, 501, corsOrigin);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: 'bad_request' }, 400, corsOrigin);
+  }
+  const q = String(body.q || '').trim().slice(0, 300);
+  if (q.length < 3) {
+    return json({ error: 'bad_request', message: 'Query too short.' }, 400, corsOrigin);
+  }
+
+  const cacheKey = new Request(`https://scholar.cache/${encodeURIComponent(q.toLowerCase())}`);
+  const cache = caches.default;
+  const hit = await cache.match(cacheKey);
+  if (hit) {
+    const cached = await hit.json();
+    return json({ ...cached, cached: true }, 200, corsOrigin);
+  }
+
+  const params = new URLSearchParams({
+    engine: 'google_scholar',
+    q,
+    num: '8',
+    api_key: env.SERPAPI_KEY,
+  });
+
+  let data;
+  try {
+    const res = await fetch(`https://serpapi.com/search.json?${params}`, {
+      headers: { 'User-Agent': UA },
+    });
+    data = await res.json();
+    if (!res.ok || data.error) {
+      return json({ error: 'serpapi_error', message: data.error || `SerpAPI returned ${res.status}` }, 502, corsOrigin);
+    }
+  } catch (err) {
+    return json({ error: 'serpapi_unreachable', message: String(err) }, 502, corsOrigin);
+  }
+
+  const results = (data.organic_results || []).map(normaliseScholarRow).filter((r) => r.title);
+  const payload = { results, query: q };
+
+  // Cache the shaped result, not the raw SerpAPI response.
+  ctx.waitUntil(cache.put(cacheKey, new Response(JSON.stringify(payload), {
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'max-age=86400' },
+  })));
+
+  return json(payload, 200, corsOrigin);
+}
+
+/**
+ * Scholar has no structured metadata: everything is in a summary line like
+ * "A Author, B Author - Journal Name, 2001 - publisher.com". Parse what is
+ * reliably there and leave the rest null rather than guessing.
+ */
+function normaliseScholarRow(row) {
+  const summary = row.publication_info?.summary || '';
+  const [namesPart, ...restParts] = summary.split(' - ');
+  const rest = restParts.join(' - ');
+
+  const authors = (namesPart || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s && s.length < 60 && !/^\d/.test(s));
+
+  const yearMatch = rest.match(/\b(1\d{3}|20\d{2})\b/);
+  const container = rest.split(',')[0]?.trim() || null;
+
+  return {
+    title: (row.title || '').trim(),
+    authors,
+    year: yearMatch ? Number(yearMatch[1]) : null,
+    url: row.link || null,
+    container: container && !/^\d{4}$/.test(container) ? container : null,
+    abstract: row.snippet || null,
+    citedBy: row.inline_links?.cited_by?.total ?? null,
+    source: 'Google Scholar',
+  };
 }
 
 // ------------------------------------------------------------------- helpers

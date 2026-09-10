@@ -49,9 +49,56 @@ immediately. `Z` imports a Zotero collection.
 **Columns (Groups)** — the `+` at the end of the board creates one, title
 selected for typing. Each has its own sort view.
 
-**Cards (Books)** — the `+` at the foot of a column opens a dialog that takes a
-DOI or ISBN (**Look up** fills the rest in from Crossref, Open Library or Google
-Books) or plain manual entry.
+**Cards (Books)** — the `+` at the foot of a column opens a dialog whose first
+field resolves itself.
+
+### Adding a book
+
+Paste anything identifying into the first field and the rest fills in. No button
+to press: it resolves as you type, on paste, and on leaving the field.
+
+| Paste | Resolved via |
+|---|---|
+| `9780804011662`, `978-0-8040-1166-2` | Open Library, then Google Books |
+| `10.1086/230209`, or any URL containing a DOI | Crossref, then DataCite, then OpenAlex |
+| `https://books.google.com/books?id=…` or `/books/edition/…/ID` | Google Books |
+| `https://archive.org/details/…` | archive.org (page count comes from the scan) |
+| `https://openlibrary.org/books/OL…M` | Open Library |
+| `arXiv:1706.03762v5`, `arxiv.org/abs/…`, `10.48550/arXiv.…` | OpenAlex, then DataCite |
+| a plain title — press Enter | Crossref + Google Books + OpenAlex, and you pick |
+
+Every one of those is keyless and CORS-enabled, so lookup works on a bare static
+deploy with nothing configured.
+
+Two details that matter in use: **only blank fields are written**, so anything
+typed by hand survives a later lookup; and **submitting with just an identifier
+resolves it** rather than complaining that the title is empty.
+
+ISBNs are checksum-validated, so a random 13-digit number falls through to a
+title search instead of being looked up as a book that does not exist.
+
+*Optionally*, Google Scholar can be added for title searches by giving the auth
+worker a SerpAPI key (`wrangler secret put SERPAPI_KEY`). It is genuinely
+optional — the keyless sources above already cover indexed literature, Scholar
+mostly adds grey literature and older work. Responses are cached for a day, as
+the free tier allows only 100 searches a month.
+
+### Exporting a bibliography
+
+Right-click a **book**, a **ctrl-clicked selection of books**, a **group**, or a
+**project** → *Export bibliography…*. Also `/export` in the palette, which uses
+the current selection if there is one.
+
+Formats: **BibTeX**, **RIS**, **CSL-JSON**, **APA 7**, **MLA 9**, **Chicago**,
+and a **Markdown list**. Preview it, then copy or download.
+
+For books linked to Zotero, Zotero's own exporter is used — it knows the
+editors, translators, editions and places this board never stores, and its
+formatted styles are real CSL. Everything else is generated locally. BibTeX, RIS
+and CSL-JSON generated locally are exact; the formatted styles are a good
+approximation and the dialog says so when any entry falls back to them.
+
+A book that appears in several groups as a linked copy is exported once.
 
 ### Ordering
 
@@ -125,12 +172,14 @@ title. Click it to change, or use the right-click menu.
 **A book** (or the ☰ on the card): open its page · open in Zotero · open the PDF
 · log reading · set the reading mode · **add task to Todoist** (a dialog
 pre-filled with the title, authors, progress, and a link back to the work) ·
-duplicate · move to… · copy to… · **mark read** · edit details · remove.
+duplicate · move to… · copy to… · **export bibliography** · **mark read** ·
+edit details · remove.
 
 With several books selected, every one of those applies to the whole selection.
 
 **A group or project**: rename · **add to Todoist** (a `Finish <name>` task
-straight into your Inbox) · duplicate · move to… · copy to… · delete.
+straight into your Inbox) · **export bibliography** · duplicate · move to… ·
+copy to… · delete.
 
 Deleting offers to delete the matching Todoist project or section too. It
 **never** touches the linked Zotero collection.
@@ -155,8 +204,8 @@ Click any card. You get, in the manner of opening a Todoist task:
 
 <kbd>Shift</kbd>+<kbd>Space</kbd>.
 
-`/read` `/open` `/pdf` `/zotero` `/markread` `/task` `/goto` `/book` `/group`
-`/project` `/import` `/sync` `/archive` `/settings` `/help`
+`/read` `/open` `/pdf` `/zotero` `/markread` `/task` `/export` `/goto` `/book`
+`/group` `/project` `/import` `/sync` `/archive` `/settings` `/help`
 
 Without a slash it searches every book, group and project. It also takes whole
 sentences: **`read 30 pages of Capital`** finds the book and logs it in one
@@ -382,8 +431,10 @@ js/
   ingest.js    Zotero → board  (shared by the app and the nightly action)
   sync.js      browser side of import and re-sync
   zotero.js    Zotero Web API      todoist.js  Todoist API
-  gist.js      GitHub Gist mirror  metadata.js DOI/ISBN lookup
+  gist.js      GitHub Gist mirror
   nlp.js       reading-phrase parser, fuzzy matching
+  metadata.js  identifier detection + DOI/ISBN/arXiv/archive.org resolution
+  bibliography.js  BibTeX / RIS / CSL-JSON / APA / MLA / Chicago export
   dnd.js       pointer-based drag and drop (mouse + touch)
   render.js    the board          detail.js   the book page
   palette.js   command palette    actions.js  menu and command implementations
@@ -417,13 +468,17 @@ Or push to `main` and set Pages → Source → **GitHub Actions**.
 ## Tests
 
 ```
-node scripts/check.mjs         21 modules — imports and element ids resolve
+node scripts/check.mjs         22 modules — imports and element ids resolve
 node scripts/test-store.mjs    22 tests   — board model, linked duplicates, undo
 node scripts/test-ingest.mjs   12 tests   — Zotero import shape, sync safety
-node scripts/test-worker.mjs   16 tests   — the auth worker: allowlist, CORS, secret handling
-node scripts/test-dom.mjs      29 tests   — boots the real app in jsdom and drives it
+node scripts/test-worker.mjs   21 tests   — auth worker: allowlist, CORS, secrets, Scholar cache
+node scripts/test-citation.mjs 27 tests   — identifier detection and every export format
+node scripts/test-dom.mjs      38 tests   — boots the real app in jsdom and drives it
 node scripts/test-dnd.mjs      13 tests   — synthesises pointer drags over a fake layout
 node scripts/test-auth.mjs     26 tests   — every outcome of the sign-in gate
+
+node scripts/mutate.mjs                   — checks the suites can actually fail
+node scripts/test-citation-live.mjs       — opt-in: the real Crossref/OpenLibrary/… routes
 ```
 
 The last two need `npm install --no-save jsdom`, and skip themselves politely if
@@ -447,7 +502,15 @@ columns scrollable.
 be exercised: a forged `state`, a refused account, an expired token, an offline
 revalidation.
 
-The suites are mutation-checked. Breaking the drag threshold, the drop index,
-the selection carry, the touch grip, the CSRF `state` check, the allowlist (in
-either the app or the Worker), the 401 handling, or the CORS origin check each
-fails exactly the test that covers it. All seven run in CI before every deploy.
+The suites are mutation-checked, and `scripts/mutate.mjs` automates it: it
+applies a deliberate defect, runs the relevant suite, restores the file, and
+reports whether the defect was caught — refusing to claim anything if the edit
+did not actually apply, which is how a green mutation run can otherwise lie.
+
+That harness has already earned its keep twice. It showed that a test for the
+ISBN checksum was passing for the wrong reason (the length regex rejected the
+example before the checksum ran), and that the project-level de-duplication of
+linked copies was untested (the fixture duplicated a book inside one group,
+where a lower-level check already collapsed it).
+
+Everything except the live lookup test runs in CI before every deploy.

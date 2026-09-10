@@ -11,6 +11,13 @@ GITHUB_CLIENT_ID = "Ov23lioOgyK8KJ3BM7hq"
 # Comma-separated GitHub logins permitted to use this instance.
 ALLOWED_LOGINS = "misteramazingyt"
 
+# OPTIONAL. Adds Google Scholar to title searches, via
+#   wrangler secret put SERPAPI_KEY
+# Without it the /scholar route answers 501 and the app quietly falls back to
+# its keyless sources (Crossref, OpenAlex, Google Books), which already cover
+# indexed literature well. Results are cached for a day because the free
+# SerpAPI tier is only 100 searches a month.
+
 # Comma-separated origins allowed to call this worker. Keep this tight:
 # it is what stops another site from using your worker as a free OAuth backend.
 ALLOWED_ORIGINS = "https://misteramazingyt.github.io,http://localhost:8000,http://127.0.0.1:8000"
