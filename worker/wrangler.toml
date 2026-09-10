@@ -6,7 +6,7 @@ compatibility_date = "2025-01-01"
 # set it with:  wrangler secret put GITHUB_CLIENT_SECRET
 [vars]
 # From your GitHub OAuth App (Settings -> Developer settings -> OAuth Apps).
-GITHUB_CLIENT_ID = ""
+GITHUB_CLIENT_ID = "Ov23lioOgyK8KJ3BM7hq"
 
 # Comma-separated GitHub logins permitted to use this instance.
 ALLOWED_LOGINS = "misteramazingyt"
@@ -15,5 +15,10 @@ ALLOWED_LOGINS = "misteramazingyt"
 # it is what stops another site from using your worker as a free OAuth backend.
 ALLOWED_ORIGINS = "https://misteramazingyt.github.io,http://localhost:8000,http://127.0.0.1:8000"
 
-# Keep the worker off the public workers.dev subdomain once a route is set up.
-# workers_dev = false
+# Pinned explicitly rather than left to wrangler's defaults, which warn on every
+# deploy. The workers.dev URL is what the app calls, so it stays on. Preview URLs
+# are off: each deployment would otherwise get its own extra hostname serving
+# this same auth endpoint, and an auth endpoint wants the smallest surface it can
+# have. Turn them back on only if you want to test a version before promoting it.
+workers_dev = true
+preview_urls = false

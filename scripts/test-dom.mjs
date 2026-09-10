@@ -52,6 +52,20 @@ define(window, 'localStorage', {
 window.matchMedia = (q) => ({
   matches: false, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {},
 });
+
+// Now that an OAuth app is configured, the board does not render until the
+// sign-in gate is satisfied — including here. Seed a signed-in session before
+// main.js loads. Revalidation calls api.github.com, which the stubbed fetch
+// below refuses; auth.js treats an unreachable GitHub as "keep the session",
+// so an offline test run stays signed in. The gate's own behaviour is covered
+// exhaustively by test-auth.mjs; this is only about getting past it.
+memory.set('readerHelper.auth.v1', JSON.stringify({
+  token: 'gho_test_session',
+  login: 'misteramazingyt',
+  scope: 'gist',
+  signedInAt: new Date().toISOString(),
+}));
+
 window.requestAnimationFrame = (fn) => setTimeout(() => fn(Date.now()), 0);
 window.cancelAnimationFrame = (id) => clearTimeout(id);
 window.scrollTo = () => {};

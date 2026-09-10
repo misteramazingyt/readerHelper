@@ -10,10 +10,10 @@
 
 export const AUTH = {
   /** OAuth App client ID (Settings -> Developer settings -> OAuth Apps). */
-  clientId: '',
+  clientId: 'Ov23lioOgyK8KJ3BM7hq',
 
   /** Deployed Worker origin, e.g. https://readerhelper-auth.<subdomain>.workers.dev */
-  workerUrl: '',
+  workerUrl: 'https://readerhelper-auth.readerhelper-auth.workers.dev',
 
   /**
    * Scopes requested at sign-in. `gist` lets the session token drive the board
