@@ -229,7 +229,10 @@ Cloudflare Worker that does only that, and holds the only secret in the system.
 ### Setup, once
 
 **1. Create the OAuth App** — <https://github.com/settings/developers> →
-*New OAuth App*:
+**OAuth Apps** → *New OAuth App*. Note this is an **OAuth App**, not a GitHub
+App; they are different things on adjacent tabs, and only the OAuth App flow is
+implemented here. Its client ID will begin `Ov23li` (a GitHub App's begins
+`Iv`, which is the giveaway that you picked the wrong tab).
 
 | Field | Value |
 |---|---|
@@ -257,7 +260,7 @@ Note the deployed URL. Check it with
 **3. Point the app at it** — in [`js/auth-config.js`](js/auth-config.js):
 
 ```js
-clientId: 'Iv1.xxxxxxxxxxxx',
+clientId: 'Ov23liXXXXXXXXXXXXXX',
 workerUrl: 'https://readerhelper-auth.<subdomain>.workers.dev',
 ```
 

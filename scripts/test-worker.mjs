@@ -15,7 +15,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const worker = (await import(pathToFileURL(join(root, 'worker', 'src', 'worker.js')).href)).default;
 
 const ENV = {
-  GITHUB_CLIENT_ID: 'Iv1.test123',
+  GITHUB_CLIENT_ID: 'Ov23liTESTCLIENTID00',
   GITHUB_CLIENT_SECRET: 'supersecret-never-leak',
   ALLOWED_LOGINS: 'misteramazingyt',
   ALLOWED_ORIGINS: 'https://misteramazingyt.github.io,http://localhost:8000',

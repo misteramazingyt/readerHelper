@@ -174,7 +174,7 @@ await check('the dev bypass opens an unconfigured instance', async () => {
 
 await check('the dev bypass does NOT survive once OAuth is configured', async () => {
   const w = await world({
-    config: { clientId: 'Iv1.test123', workerUrl: 'https://auth.example.workers.dev' },
+    config: { clientId: 'Ov23liTESTCLIENTID00', workerUrl: 'https://auth.example.workers.dev' },
   });
   w.local.set('readerHelper.auth.devBypass', '1');
   eq(await w.auth.gate(), false, 'still gated');
@@ -183,7 +183,7 @@ await check('the dev bypass does NOT survive once OAuth is configured', async ()
 
 // --- configured, signed out
 
-const CONFIGURED = { clientId: 'Iv1.test123', workerUrl: 'https://auth.example.workers.dev' };
+const CONFIGURED = { clientId: 'Ov23liTESTCLIENTID00', workerUrl: 'https://auth.example.workers.dev' };
 
 await check('a configured build asks you to sign in', async () => {
   const w = await world({ config: CONFIGURED });
@@ -203,7 +203,7 @@ await check('signing in redirects to GitHub with the right parameters', async ()
   eq(w.navigations.length, 1, 'one navigation');
   const url = new URL(w.navigations[0]);
   eq(url.origin + url.pathname, 'https://github.com/login/oauth/authorize', 'authorize endpoint');
-  eq(url.searchParams.get('client_id'), 'Iv1.test123', 'client id');
+  eq(url.searchParams.get('client_id'), 'Ov23liTESTCLIENTID00', 'client id');
   eq(url.searchParams.get('redirect_uri'), 'https://misteramazingyt.github.io/readerHelper/', 'redirect uri');
   eq(url.searchParams.get('scope'), 'gist', 'scope');
   ok(url.searchParams.get('state'), 'state present');
