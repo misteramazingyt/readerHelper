@@ -68,6 +68,9 @@ export default {
     if (url.pathname === '/goodreads' && request.method === 'POST') {
       return handleGoodreads(request, env, ctx, corsOrigin);
     }
+    if (url.pathname === '/goodreads-book' && request.method === 'POST') {
+      return handleGoodreadsBook(request, env, ctx, corsOrigin);
+    }
 
     return json({ error: 'not_found' }, 404, corsOrigin);
   },
@@ -379,6 +382,63 @@ async function handleGoodreads(request, env, ctx, corsOrigin) {
   const payload = { xml, count, page, shelf };
   ctx.waitUntil(cache.put(cacheKey, new Response(JSON.stringify(payload), {
     headers: { 'Content-Type': 'application/json', 'Cache-Control': 'max-age=600' },
+  })));
+  return json(payload, 200, corsOrigin);
+}
+
+/**
+ * Fetch one Goodreads book page so its JSON-LD can be read.
+ *
+ * Same discipline as the shelf route: the URL is built here from a numeric id,
+ * never taken from the caller. Only the head of the document is returned — the
+ * JSON-LD and OpenGraph tags live there, and a whole Goodreads page is ~150KB
+ * of mostly markup nobody needs.
+ */
+async function handleGoodreadsBook(request, env, ctx, corsOrigin) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: 'bad_request' }, 400, corsOrigin);
+  }
+
+  const bookId = String(body.bookId || '').trim();
+  if (!/^\d{1,12}$/.test(bookId)) {
+    return json({ error: 'bad_request', message: 'A numeric Goodreads book id is required.' }, 400, corsOrigin);
+  }
+
+  const cacheKey = new Request(`https://goodreads.cache/book/${bookId}`);
+  const cache = caches.default;
+  const hit = await cache.match(cacheKey);
+  if (hit) return json({ ...(await hit.json()), cached: true }, 200, corsOrigin);
+
+  let html;
+  try {
+    const res = await fetch(`https://www.goodreads.com/book/show/${bookId}`, {
+      headers: {
+        'User-Agent': UA,
+        Accept: 'text/html,application/xhtml+xml',
+      },
+      redirect: 'follow',
+    });
+    if (res.status === 404) {
+      return json({ error: 'not_found', message: `Goodreads has no book ${bookId}.` }, 404, corsOrigin);
+    }
+    if (!res.ok) {
+      return json({ error: 'goodreads_error', message: `Goodreads returned ${res.status}.` }, 502, corsOrigin);
+    }
+    html = await res.text();
+  } catch (err) {
+    return json({ error: 'goodreads_unreachable', message: String(err) }, 502, corsOrigin);
+  }
+
+  // Everything worth having is above </head>; keep a little past it for safety.
+  const headEnd = html.indexOf('</head>');
+  const trimmed = headEnd > 0 ? html.slice(0, headEnd + 7) : html.slice(0, 120_000);
+
+  const payload = { html: trimmed, bookId };
+  ctx.waitUntil(cache.put(cacheKey, new Response(JSON.stringify(payload), {
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'max-age=86400' },
   })));
   return json(payload, 200, corsOrigin);
 }

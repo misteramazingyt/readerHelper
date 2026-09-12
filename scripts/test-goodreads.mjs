@@ -10,6 +10,7 @@ import {
   parseCsv, toCsv, csvToObjects, cleanIsbn, fromCsvRow, parseLibraryCsv,
   parseShelfRss, shelfNameFromFeedTitle, bookUrl, shelfRssUrl, toImportCsv,
   toShelfName, toGoodreadsDate, splitShelves, IMPORT_COLUMNS,
+  parseBookPage, titleFromBookUrl,
 } from '../js/goodreads.js';
 import {
   planGroups, prettyShelf, orderGroupNames, findExisting, applyGoodreads,
@@ -392,6 +393,59 @@ await check('a book links to Goodreads by the best identifier it has', () => {
 await check('the shelf feed URL is built correctly', () => {
   eq(shelfRssUrl('12345', 'read'), 'https://www.goodreads.com/review/list_rss/12345?shelf=read', 'url');
   has(shelfRssUrl('1', 'to read'), 'shelf=to%20read', 'shelf is encoded');
+});
+
+// ========================================================== a single book
+
+// Trimmed from a real Goodreads book page: the JSON-LD block and the
+// OpenGraph tags, which is everything the parser reads.
+const BOOK_PAGE = `<!DOCTYPE html><html><head>
+<meta property="og:title" content="Black Cloud: A Still Life" />
+<meta property="og:url" content="https://www.goodreads.com/book/show/73142.Black_Cloud" />
+<meta property="books:isbn" content="9780595183395" />
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"Book","name":"Black Cloud: A Still Life",
+ "bookFormat":"Paperback","numberOfPages":364,"inLanguage":"English",
+ "isbn":"9780595183395","author":[{"@type":"Person","name":"Mark Anderson"}]}
+</script>
+</head><body>irrelevant</body></html>`;
+
+await check('a book page yields its details from the JSON-LD', () => {
+  const book = parseBookPage(BOOK_PAGE, { goodreadsId: '73142' });
+  eq(book.title, 'Black Cloud: A Still Life', 'title');
+  eq(book.authors, ['Mark Anderson'], 'author');
+  eq(book.isbn, '9780595183395', 'isbn');
+  eq(book.totalPages, 364, 'pages');
+  eq(book.goodreadsId, '73142', 'id');
+  eq(book.url, 'https://www.goodreads.com/book/show/73142', 'canonical link');
+});
+
+await check('the id is recovered from the page when it was not passed in', () => {
+  eq(parseBookPage(BOOK_PAGE).goodreadsId, '73142', 'read out of og:url');
+});
+
+await check('OpenGraph carries it when the JSON-LD is missing or broken', () => {
+  const noLd = BOOK_PAGE.replace(/<script[\s\S]*?<\/script>/, '');
+  const book = parseBookPage(noLd, { goodreadsId: '73142' });
+  eq(book.title, 'Black Cloud: A Still Life', 'title from og:title');
+  eq(book.isbn, '9780595183395', 'isbn from books:isbn');
+
+  const brokenLd = BOOK_PAGE.replace('"numberOfPages":364,', '"numberOfPages":364');
+  ok(parseBookPage(brokenLd)?.title, 'malformed JSON does not throw, og: still works');
+});
+
+await check('a page with no book on it yields nothing rather than a blank book', () => {
+  eq(parseBookPage('<html><head></head></html>'), null, 'empty page');
+  eq(parseBookPage(''), null, 'no page');
+});
+
+await check('the title in the URL slug is recoverable', () => {
+  // The fallback for when the page itself cannot be fetched.
+  eq(titleFromBookUrl('https://www.goodreads.com/book/show/73142.The_Order_of_Things'),
+    'The Order of Things', 'underscore slug');
+  eq(titleFromBookUrl('https://www.goodreads.com/book/show/1885-pride-and-prejudice'),
+    'pride and prejudice', 'hyphen slug');
+  eq(titleFromBookUrl('https://www.goodreads.com/book/show/73142'), null, 'no slug to read');
 });
 
 // ========================================================= the upload bot

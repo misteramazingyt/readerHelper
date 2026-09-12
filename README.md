@@ -65,6 +65,7 @@ to press: it resolves as you type, on paste, and on leaving the field.
 | `https://archive.org/details/…` | archive.org (page count comes from the scan) |
 | `https://openlibrary.org/books/OL…M` | Open Library |
 | `arXiv:1706.03762v5`, `arxiv.org/abs/…`, `10.48550/arXiv.…` | OpenAlex, then DataCite |
+| `goodreads.com/book/show/…` | Goodreads (via the worker), enriched by ISBN |
 | a plain title — press Enter | Crossref + Google Books + OpenAlex, and you pick |
 
 Every one of those is keyless and CORS-enabled, so lookup works on a bare static
@@ -197,6 +198,13 @@ the shape their importer accepts; upload it at
 names become shelves, finished books land on `read` with their date, and your
 notes can go along as the review. Their importer matches on ISBN first, so the
 dialog tells you how many of the selected books have one.
+
+**In — one book.** Paste a Goodreads link into **+ Add a book** and it resolves
+like any other identifier. The page's JSON-LD gives the title, author, ISBN and
+page count; if there is an ISBN, the keyless sources then fill in the year and
+publisher, which Goodreads does not publish. Read through the worker, since the
+page sends no CORS headers — and if the worker is unreachable it falls back to
+searching for the title in the URL slug rather than refusing the paste.
 
 Each book also gets **Open in Goodreads** in its menu.
 
@@ -654,11 +662,11 @@ Or push to `main` and set Pages → Source → **GitHub Actions**.
 node scripts/check.mjs         27 modules — imports and element ids resolve
 node scripts/test-store.mjs    22 tests   — board model, linked duplicates, undo
 node scripts/test-ingest.mjs   12 tests   — Zotero import shape, sync safety
-node scripts/test-worker.mjs   27 tests   — auth worker: allowlist, CORS, secrets, Scholar cache
-node scripts/test-citation.mjs 27 tests   — identifier detection and every export format
+node scripts/test-worker.mjs   30 tests   — auth worker: allowlist, CORS, secrets, Scholar cache
+node scripts/test-citation.mjs 28 tests   — identifier detection and every export format
 node scripts/test-push.mjs     25 tests   — pushing to Zotero, against a fake Zotero API
 node scripts/test-sync.mjs     24 tests   — the merge, and the pull-merge-push loop
-node scripts/test-goodreads.mjs 41 tests  — their CSV, their RSS, the CSV they import, the bot
+node scripts/test-goodreads.mjs 46 tests  — their CSV, their RSS, the CSV they import, the bot
 python scripts/test_protocol.py 10 tests  — what the readerhelper:// handler refuses
 node scripts/test-dom.mjs      41 tests   — boots the real app in jsdom and drives it
 node scripts/test-dnd.mjs      13 tests   — synthesises pointer drags over a fake layout

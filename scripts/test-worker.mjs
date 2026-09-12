@@ -415,6 +415,47 @@ await check('the page number is clamped rather than trusted', async () => {
   ok(called.includes('page=1'), 'a negative page becomes 1');
 });
 
+const grBook = (body) => worker.fetch(
+  new Request('https://auth.example.workers.dev/goodreads-book', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Origin: APP_ORIGIN },
+    body: JSON.stringify(body),
+  }),
+  ENV, { waitUntil: (p) => p },
+);
+
+await check('a book page is proxied, trimmed to its head', async () => {
+  cacheStore.clear();
+  let called = '';
+  globalThis.fetch = async (url) => {
+    called = String(url);
+    return new Response('<html><head><title>x</title></head><body>' + 'y'.repeat(50000) + '</body></html>', { status: 200 });
+  };
+  const res = await grBook({ bookId: '73142' });
+  eq(res.status, 200, 'ok');
+  const body = await res.json();
+  eq(called, 'https://www.goodreads.com/book/show/73142', 'built the URL itself');
+  ok(body.html.endsWith('</head>'), 'trimmed at the head');
+  ok(body.html.length < 500, 'the body was not shipped back');
+});
+
+await check('the book route will not fetch a caller-supplied URL either', async () => {
+  cacheStore.clear();
+  let called = false;
+  globalThis.fetch = async () => { called = true; return new Response('', { status: 200 }); };
+  for (const evil of ['http://169.254.169.254/', '../../x', 'abc', '']) {
+    eq((await grBook({ bookId: evil })).status, 400, `refused ${JSON.stringify(evil)}`);
+  }
+  eq(called, false, 'nothing fetched');
+});
+
+await check('a book that does not exist is reported as such', async () => {
+  cacheStore.clear();
+  globalThis.fetch = async () => new Response('', { status: 404 });
+  const res = await grBook({ bookId: '999999999' });
+  eq(res.status, 404, 'not found');
+  eq((await res.json()).error, 'not_found', 'named');
+});
+
 // -------------------------------------------------------------------- health
 
 await check('health reports configuration without revealing it', async () => {

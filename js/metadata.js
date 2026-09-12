@@ -47,6 +47,18 @@ export function detect(input) {
     return { kind: 'doi', value, label: 'DOI' };
   }
 
+  // Goodreads: /book/show/<id>, optionally with a title slug. The slug is
+  // decorative — Goodreads resolves on the id alone — but it is a usable
+  // fallback when the page itself cannot be reached.
+  const grIsbn = raw.match(/goodreads\.[a-z.]+\/book\/isbn\/([0-9Xx-]{10,17})/i);
+  if (grIsbn) {
+    const d = grIsbn[1].replace(/-/g, '');
+    if (isValidIsbn(d)) return { kind: 'isbn', value: d.toUpperCase(), label: 'ISBN' };
+  }
+  const gr = raw.match(/goodreads\.[a-z.]+\/book\/show\/(\d+)/i)
+    || raw.match(/goodreads\.[a-z.]+\/review\/show\/\d+[^\d]*book[_-]?id=(\d+)/i);
+  if (gr) return { kind: 'goodreads', value: gr[1], label: 'Goodreads', raw };
+
   // Google Books: /books?id=XXX  or  /books/edition/<slug>/XXX
   const gb = raw.match(/books\.google\.[a-z.]+\/books\?[^\s]*\bid=([\w-]+)/i)
     || raw.match(/google\.[a-z.]+\/books\/edition\/[^/]*\/([\w-]+)/i)
@@ -207,6 +219,7 @@ function record(fields) {
     issue: null,
     pages: null,
     abstract: null,
+    goodreadsId: null,
     source: 'unknown',
     ...fields,
   };
@@ -453,6 +466,59 @@ async function lookupDoiViaOpenAlex(doi, opts) {
 }
 
 /**
+ * A Goodreads book link.
+ *
+ * Goodreads sends no CORS headers, so the page is read through the worker. When
+ * that is unavailable — worker not redeployed, offline, page gone — the title
+ * in the URL slug is enough to find the book in the keyless sources, which is a
+ * far better answer than refusing the paste.
+ */
+export async function lookupGoodreads(bookId, opts = {}) {
+  const gr = await import('./goodreads.js');
+
+  if (opts.workerUrl) {
+    try {
+      const book = await gr.fetchBook(opts.workerUrl, bookId, { signal: opts.signal });
+      // Goodreads publishes a title, author, ISBN and page count but not the
+      // publisher or year; with an ISBN the keyless sources fill those in.
+      if (book.isbn) {
+        try {
+          const enriched = await lookupIsbn(book.isbn, opts);
+          return record({
+            ...enriched,
+            title: book.title || enriched.title,
+            totalPages: book.totalPages || enriched.totalPages,
+            goodreadsId: book.goodreadsId,
+            url: book.url || enriched.url,
+            source: `Goodreads + ${enriched.source}`,
+          });
+        } catch {
+          /* the Goodreads record on its own is still good */
+        }
+      }
+      return record({ ...book, source: 'Goodreads' });
+    } catch (err) {
+      if (err.name === 'AbortError') throw err;
+      console.warn('Goodreads page unavailable; falling back to the URL slug', err);
+    }
+  }
+
+  const title = gr.titleFromBookUrl(opts.raw || '');
+  if (!title) {
+    throw new Error(
+      'Could not read that Goodreads page. Redeploy the worker to resolve Goodreads links, or paste the ISBN instead.',
+    );
+  }
+  const candidates = await search(title, opts);
+  if (!candidates.length) throw new Error(`Nothing found for “${title}”.`);
+  return record({
+    ...candidates[0],
+    goodreadsId: bookId,
+    source: `${candidates[0].source} (matched from the Goodreads title)`,
+  });
+}
+
+/**
  * Free-text search across Crossref, Google Books and OpenAlex — and Google
  * Scholar too, if a worker with a SerpAPI key is configured.
  *
@@ -543,6 +609,9 @@ function dedupe(rows) {
  */
 export async function resolve(input, opts = {}) {
   const { kind, value, label } = detect(input);
+  // The Goodreads fallback reads the title out of the URL slug, so the raw
+  // text has to travel with the options.
+  opts = { ...opts, raw: String(input || '') };
 
   switch (kind) {
     case 'doi':
@@ -557,6 +626,8 @@ export async function resolve(input, opts = {}) {
       return one(await lookupOpenLibraryKey(value, opts), kind, label);
     case 'arxiv':
       return one(await lookupArxiv(value, opts), kind, label);
+    case 'goodreads':
+      return one(await lookupGoodreads(value, opts), kind, label);
     case 'url': {
       // No DOI in it and no host we recognise: keep the link, let the user type
       // the rest. Better than refusing outright.

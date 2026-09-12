@@ -67,6 +67,8 @@ export async function promptAddBook(groupId) {
         // Adds Google Scholar to title searches, but only if the worker has a
         // SerpAPI key; without one it answers 501 and is quietly skipped.
         scholarUrl: AUTH.workerUrl || null,
+        // Goodreads pages are read through the same worker.
+        workerUrl: AUTH.workerUrl || null,
       });
       let chosen = record;
       if (!chosen && candidates.length) {
@@ -110,7 +112,7 @@ export async function promptAddBook(groupId) {
   const values = await openForm({
     title: 'Add a book',
     submitLabel: 'Add',
-    intro: 'Paste a DOI, ISBN, arXiv id, or a Google Books / archive.org / Open Library link — the rest fills itself in. Or type a title and press Enter to search. Everything can also be entered by hand.',
+    intro: 'Paste a DOI, ISBN, arXiv id, or a Goodreads / Google Books / archive.org / Open Library link — the rest fills itself in. Or type a title and press Enter to search. Everything can also be entered by hand.',
     beforeSubmit: async (v, api) => {
       // The old behaviour here was to refuse with "Title is required" while an
       // identifier sat unresolved in the field above. Resolve it instead.
@@ -120,8 +122,8 @@ export async function promptAddBook(groupId) {
     fields: [
       {
         name: 'identifier',
-        label: 'DOI, ISBN, arXiv, or link',
-        placeholder: '9780804011662 · 10.1086/230209 · archive.org/details/… · books.google.com/…',
+        label: 'DOI, ISBN, arXiv, or a book link',
+        placeholder: '9780804011662 · 10.1086/230209 · goodreads.com/book/show/… · archive.org/details/…',
         autofocus: true,
         onInput: (value, api) => runLookup(value, api, { quiet: true }),
       },
@@ -166,6 +168,7 @@ export async function promptAddBook(groupId) {
     volume: resolved?.volume || null,
     issue: resolved?.issue || null,
     abstract: resolved?.abstract || null,
+    goodreadsId: resolved?.goodreadsId || (detected.kind === 'goodreads' ? detected.value : null),
   });
   toast(`Added “${truncate(values.title, 44)}”.`, { type: 'success' });
   return created;

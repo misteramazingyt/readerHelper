@@ -228,6 +228,91 @@ export function shelfNameFromFeedTitle(feedTitle) {
   return m ? m[1].trim() : null;
 }
 
+// --------------------------------------------------------- a single book
+
+/**
+ * A Goodreads book page carries a JSON-LD `Book` block — name, author, isbn,
+ * numberOfPages — which is far steadier than scraping the markup around it.
+ * Falls back to the OpenGraph tags, which carry the title at least.
+ */
+export function parseBookPage(html, { goodreadsId = null } = {}) {
+  const text = String(html || '');
+  let data = null;
+
+  for (const m of text.matchAll(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const parsed = JSON.parse(m[1].trim());
+      const candidate = Array.isArray(parsed) ? parsed.find((x) => /Book/i.test(x?.['@type'] || '')) : parsed;
+      if (candidate && /Book/i.test(candidate['@type'] || '')) {
+        data = candidate;
+        break;
+      }
+    } catch {
+      /* a malformed block is not worth failing over */
+    }
+  }
+
+  const meta = (prop) => {
+    const m = text.match(new RegExp(`<meta[^>]+property="${prop}"[^>]+content="([^"]*)"`, 'i'));
+    return m ? decodeEntities(m[1]).trim() : '';
+  };
+
+  const title = stripTags(data?.name || meta('og:title'));
+  if (!title) return null;
+
+  const authors = []
+    .concat(data?.author || [])
+    .map((a) => stripTags(a?.name || a))
+    .filter(Boolean);
+
+  const id = goodreadsId
+    || (meta('og:url').match(/\/book\/show\/(\d+)/) || [])[1]
+    || null;
+
+  return {
+    title,
+    authors,
+    year: yearOf(data?.datePublished),
+    isbn: cleanIsbn(data?.isbn) || cleanIsbn(meta('books:isbn')),
+    totalPages: num(data?.numberOfPages) || num(meta('books:page_count')),
+    itemType: 'book',
+    goodreadsId: id,
+    url: id ? `https://www.goodreads.com/book/show/${id}` : (meta('og:url') || null),
+    source: 'Goodreads',
+  };
+}
+
+/** The title Goodreads put in the URL slug, for use when the page is unreachable. */
+export function titleFromBookUrl(url) {
+  const m = String(url || '').match(/\/book\/show\/\d+[.\-]([^/?#]+)/);
+  if (!m) return null;
+  return decodeURIComponent(m[1])
+    .replace(/[_+]+/g, ' ')
+    .replace(/-/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim() || null;
+}
+
+/** Fetch one book through the worker, which adds the CORS headers. */
+export async function fetchBook(workerUrl, goodreadsId, { signal } = {}) {
+  const base = String(workerUrl || '').replace(/\/$/, '');
+  if (!base) throw new Error('No worker URL configured.');
+  const res = await fetch(`${base}/goodreads-book`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bookId: goodreadsId }),
+    signal,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 404 && data.error !== 'not_found') {
+    throw new Error('The worker has no /goodreads-book route yet — redeploy it (cd worker && npx wrangler deploy).');
+  }
+  if (!res.ok) throw new Error(data.message || `The proxy returned ${res.status}.`);
+  const book = parseBookPage(data.html || '', { goodreadsId });
+  if (!book) throw new Error('That Goodreads page gave up no book details.');
+  return book;
+}
+
 // --------------------------------------------------------------------- links
 
 export function bookUrl(item) {

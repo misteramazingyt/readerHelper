@@ -64,6 +64,16 @@ await check('Google Books links are recognised in every shape', () => {
   eq(D('https://books.google.com/books?id=zyTCAlFPjgYC'), 'googlebooks', 'kind');
 });
 
+await check('Goodreads book links are recognised', () => {
+  eq(detect('https://www.goodreads.com/book/show/73142.Black_Cloud').kind, 'goodreads', 'with a slug');
+  eq(detect('https://www.goodreads.com/book/show/73142').value, '73142', 'bare id');
+  eq(detect('goodreads.com/book/show/1885-pride-and-prejudice').value, '1885', 'hyphen slug');
+  // /book/isbn/ is just an ISBN, and the keyless route handles it better.
+  eq(detect('https://www.goodreads.com/book/isbn/9780595183395').kind, 'isbn', 'isbn URL');
+  // A profile is not a book.
+  eq(detect('https://www.goodreads.com/user/show/115208623').kind, 'url', 'a profile is not a book');
+});
+
 await check('archive.org links are recognised', () => {
   eq(detect('https://archive.org/details/orderofthings0000fouc').value, 'orderofthings0000fouc', 'details');
   eq(detect('https://archive.org/stream/discipline_punish/page/n5').value, 'discipline_punish', 'stream');

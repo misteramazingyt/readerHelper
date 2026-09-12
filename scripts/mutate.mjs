@@ -175,6 +175,27 @@ const MUTATIONS = [
     suite: 'test-goodreads.mjs',
   },
   {
+    name: 'Goodreads book links stop being recognised',
+    file: 'js/metadata.js',
+    find: "  if (gr) return { kind: 'goodreads', value: gr[1], label: 'Goodreads', raw };",
+    replace: '',
+    suite: 'test-citation.mjs',
+  },
+  {
+    name: 'the book-page parser stops reading JSON-LD',
+    file: 'js/goodreads.js',
+    find: '        data = candidate;',
+    replace: '        data = null;',
+    suite: 'test-goodreads.mjs',
+  },
+  {
+    name: 'the book proxy trusts a caller-supplied book id',
+    file: 'worker/src/worker.js',
+    find: '  if (!/^\\d{1,12}$/.test(bookId)) {',
+    replace: '  if (false) {',
+    suite: 'test-worker.mjs',
+  },
+  {
     name: 'the uploader treats an unrecognised page as success',
     file: 'tools/goodreads_upload.mjs',
     find: "  return { ok: null, reason: 'unclear' };",
