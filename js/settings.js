@@ -83,8 +83,8 @@ export function openSettings() {
           }),
         ]),
 
-        section('Sync', 'A private Gist holds your board so other devices and the nightly action can reach it.', [
-          checkbox('gistSyncEnabled', 'Mirror the board to a private Gist', cfg.gistSyncEnabled),
+        section('Sync', 'Your board lives in a private Gist so every computer you sign in on sees the same projects, groups and books. It syncs on load, every minute, on focus, and a few seconds after any edit. The Gist is found automatically — you should not need to paste an ID.', [
+          checkbox('gistSyncEnabled', 'Keep this board in sync across devices', cfg.gistSyncEnabled),
           field('githubToken', 'GitHub token', cfg.githubToken, {
             type: 'password',
             autocomplete: 'off',
@@ -92,7 +92,9 @@ export function openSettings() {
               ? 'Optional. Your signed-in session already grants Gist access; a token here overrides it.'
               : 'A fine-grained PAT with Gist read/write. Nothing else is needed.',
           }),
-          field('gistId', 'Gist ID', cfg.gistId, { hint: 'Leave blank and press Push to create one.' }),
+          field('gistId', 'Gist ID', cfg.gistId, {
+            hint: 'Discovered automatically from your account. Blank it to force a fresh search.',
+          }),
         ], [
           button('Push now', async (values) => {
             const busy = showBusy('Pushing to Gist…');

@@ -404,12 +404,47 @@ refreshes bibliographic fields, but **never deletes a card and never overwrites
 reading progress, notes, tasks or a page count you entered by hand.** Your
 reading state exists only here, so a reorganisation in Zotero cannot destroy it.
 
-### Cross-device, and the nightly job
+### Every computer, the same board
 
-Turn on **Mirror the board to a private Gist** in Settings and paste a GitHub
-PAT. The board is pushed a few seconds after any change and pulled on load. If
-local and remote have diverged, the newer one wins and the decision is logged to
-the console rather than silently merged.
+Sign in on any machine and you get the same projects, groups and books. There is
+nothing to configure: the board lives in a private Gist, and the Gist is **found
+in your account** rather than remembered per machine.
+
+That last part matters. Previously each computer stored the Gist ID locally, so
+a second machine had none — and its first save created a *second* Gist. Two
+devices, two boards, drifting apart without a word. The ID is now discovered, and
+a Gist is only created when the account genuinely has none.
+
+Syncing runs by itself: on load, once a minute, when the tab regains focus, when
+the network comes back, and a few seconds after any edit. ⟳ forces it.
+
+**Every sync is a read-modify-write.** It pulls what the Gist holds, merges it
+with this machine's copy, adopts the result, and pushes back only if something
+changed. Uploading without reading first is what loses work — two machines each
+send their whole board and the later one wins outright.
+
+The merge works **record by record**, not file by file. Add a book on the laptop
+and rename a group on the desktop, and you keep both: each project, group and
+book carries a `modifiedAt`, and only that record is contested.
+
+Deletions leave a **tombstone**, because "absent here, present there" is
+otherwise ambiguous — it could be an addition on one side or a deletion on the
+other. Guessing wrong either resurrects deleted books forever or deletes new
+ones. A tombstone older than the record's last edit loses, so a book edited
+after it was deleted elsewhere comes back rather than vanishing. Tombstones are
+pruned after 90 days.
+
+This is last-write-wins at record granularity, not a CRDT: two machines editing
+the *same field of the same book* in the same minute still lose one edit. For one
+person moving between their own computers, that is the right trade.
+
+**What does not travel:** every API key and token (secrets stay on the machine
+they were pasted into), the Zotero data directory and linked-attachment path
+(they differ per computer), and which PDF handler is installed. Your Zotero user
+ID, read tag, projects root, theme and reading threshold do travel, so a new
+machine only needs its keys.
+
+### The nightly job
 
 For the 11pm sync, add these as **repository secrets**
 (Settings → Secrets and variables → Actions):
@@ -486,6 +521,8 @@ js/
   metadata.js  identifier detection + DOI/ISBN/arXiv/archive.org resolution
   bibliography.js  BibTeX / RIS / CSL-JSON / APA / MLA / Chicago export
   zotero-push.js   board -> Zotero: collection tree, duplicate matching
+  merge.js     record-level merge + tombstones, for two machines
+  boardsync.js the pull-merge-push loop and its triggers
   dnd.js       pointer-based drag and drop (mouse + touch)
   render.js    the board          detail.js   the book page
   palette.js   command palette    actions.js  menu and command implementations
@@ -519,12 +556,13 @@ Or push to `main` and set Pages → Source → **GitHub Actions**.
 ## Tests
 
 ```
-node scripts/check.mjs         23 modules — imports and element ids resolve
+node scripts/check.mjs         25 modules — imports and element ids resolve
 node scripts/test-store.mjs    22 tests   — board model, linked duplicates, undo
 node scripts/test-ingest.mjs   12 tests   — Zotero import shape, sync safety
 node scripts/test-worker.mjs   21 tests   — auth worker: allowlist, CORS, secrets, Scholar cache
 node scripts/test-citation.mjs 27 tests   — identifier detection and every export format
 node scripts/test-push.mjs     25 tests   — pushing to Zotero, against a fake Zotero API
+node scripts/test-sync.mjs     24 tests   — the merge, and the pull-merge-push loop
 node scripts/test-dom.mjs      41 tests   — boots the real app in jsdom and drives it
 node scripts/test-dnd.mjs      13 tests   — synthesises pointer drags over a fake layout
 node scripts/test-auth.mjs     26 tests   — every outcome of the sign-in gate
@@ -564,7 +602,9 @@ checksum was passing for the wrong reason (the length regex rejected the example
 before the checksum ran), and that the project-level de-duplication of linked
 copies was untested (the fixture duplicated a book inside one group, where a
 lower-level check already collapsed it). It now covers eleven defects across
-matching, escaping, collection lookup and the Zotero push.
+matching, escaping, collection lookup, the Zotero push and cross-device sync —
+seventeen defects in all, including "sync overwrites instead of merging" and "a
+new machine creates its own Gist", the two that would quietly cost real work.
 
 `test-push.mjs` stubs `fetch` with a small in-memory Zotero server rather than
 mocking the client module, so the real pagination, the real PATCH-merge and the

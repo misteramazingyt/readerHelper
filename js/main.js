@@ -11,11 +11,8 @@ import { initDnd } from './dnd.js';
 import { initPalette, openPalette } from './palette.js';
 import { openSettings, openArchive, openHelp, applyTheme } from './settings.js';
 import { toast, closeContextMenu, errorToast } from './ui.js';
-import * as gist from './gist.js';
 import * as auth from './auth.js';
-
-const GIST_DEBOUNCE_MS = 8000;
-let gistTimer = null;
+import * as boardsync from './boardsync.js';
 
 async function boot() {
   // Nothing renders until the sign-in gate is satisfied. When the build has no
@@ -30,10 +27,7 @@ async function boot() {
   applyTheme();
   render.initRender();
 
-  store.subscribe(() => {
-    render.render();
-    scheduleGistPush();
-  });
+  store.subscribe(() => render.render());
   sel.subscribeSelection(() => render.refreshSelectionStyles());
 
   wireChrome();
@@ -54,9 +48,10 @@ async function boot() {
   render.render();
   detail.restoreFromHash();
 
-  // Background: refresh from Zotero, then reconcile with the Gist.
+  // Background: reconcile with the Gist first (it may bring in books added on
+  // another machine), then refresh from Zotero.
+  boardsync.startBoardSync({ onStatus: setSyncIndicator });
   sync.syncOnLoad();
-  pullFromGistOnLoad();
 
   if (!hadState) setTimeout(() => openHelp(), 400);
 }
@@ -75,7 +70,10 @@ function seedFirstRun() {
 function wireChrome() {
   byId('add-project-btn')?.addEventListener('click', () => render.addProjectInteractive());
   byId('zotero-import-btn')?.addEventListener('click', () => sync.promptZoteroImport());
-  byId('sync-btn')?.addEventListener('click', () => sync.syncAll());
+  byId('sync-btn')?.addEventListener('click', async () => {
+    await syncBoardNow();
+    await sync.syncAll();
+  });
   byId('settings-btn')?.addEventListener('click', () => openSettings());
   byId('help-btn')?.addEventListener('click', () => openHelp());
   byId('archive-btn')?.addEventListener('click', () => openArchive());
@@ -137,12 +135,6 @@ function wireChrome() {
     toast('Board updated in another tab.');
   });
 
-  window.addEventListener('beforeunload', () => {
-    if (gistTimer) {
-      clearTimeout(gistTimer);
-      pushToGist({ quiet: true });
-    }
-  });
 }
 
 // ----------------------------------------------------------------- keyboard
@@ -248,69 +240,27 @@ function positionOf(state, placementId) {
   return gi * 10000 + g.placementOrder.indexOf(placementId);
 }
 
-// --------------------------------------------------------------- gist sync
+// --------------------------------------------------------------- board sync
 
-function gistConfigured() {
-  const cfg = store.getSettings();
-  // Either a PAT pasted in Settings or the token from signing in will do.
-  return Boolean(cfg.gistSyncEnabled && auth.githubToken(cfg));
-}
+// The engine lives in boardsync.js; this only reports its status and offers a
+// manual trigger. Syncing runs by itself: on load, every minute, when the tab
+// regains focus, when the network comes back, and a few seconds after an edit.
 
-/** Settings for the Gist client, with the session token folded in. */
-function gistCfg() {
-  return auth.withGithubToken(store.getSettings());
-}
-
-/** Debounced so a burst of edits results in one upload, not twenty. */
-function scheduleGistPush() {
-  if (!gistConfigured()) return;
-  clearTimeout(gistTimer);
-  gistTimer = setTimeout(() => {
-    gistTimer = null;
-    pushToGist({ quiet: true });
-  }, GIST_DEBOUNCE_MS);
-}
-
-async function pushToGist({ quiet = false } = {}) {
-  if (!gistConfigured()) return;
-  const cfg = gistCfg();
-  setSyncIndicator('syncing');
-  try {
-    const res = await gist.pushState(cfg, store.exportState());
-    if (res.gistId !== cfg.gistId) store.saveSettings({ gistId: res.gistId });
-    setSyncIndicator('ok');
-    if (!quiet) toast('Board pushed to the Gist.', { type: 'success' });
-  } catch (err) {
-    setSyncIndicator('error');
-    if (!quiet) errorToast(err, 'Gist push');
-    else console.warn('gist push failed', err);
+async function syncBoardNow() {
+  if (!boardsync.syncEnabled()) {
+    toast('Board sync is off — sign in, or enable it in Settings.', { type: 'error' });
+    return;
   }
-}
-
-/**
- * On load, ask the Gist what it has. Push, pull, or — if the two have genuinely
- * diverged — ask, rather than picking a winner silently.
- */
-async function pullFromGistOnLoad() {
-  const cfg = gistCfg();
-  if (!gistConfigured() || !cfg.gistId) return;
-  setSyncIndicator('syncing');
   try {
-    const { state: remote } = await gist.pullState(cfg);
-    const local = store.exportState();
-    const { verdict, reason } = gist.compareStates(local, remote);
-    setSyncIndicator('ok');
-
-    if (verdict === 'pull') {
-      store.replaceState(remote, 'pull from gist');
-      toast('Board loaded from the Gist.', { type: 'success' });
-    } else if (verdict === 'push') {
-      pushToGist({ quiet: true });
-    }
-    console.info(`gist sync: ${verdict} — ${reason}`);
+    const res = await boardsync.syncNow({ reason: 'manual', quiet: false });
+    if (res?.error) return;
+    const s = res?.summary;
+    const changed = s ? s.added + s.fromRemote + s.deleted : 0;
+    toast(changed
+      ? `Synced: ${s.added} new, ${s.fromRemote} updated, ${s.deleted} removed.`
+      : 'Board is up to date on every device.', { type: 'success' });
   } catch (err) {
-    setSyncIndicator('error');
-    console.warn('gist pull failed', err);
+    errorToast(err, 'Board sync');
   }
 }
 

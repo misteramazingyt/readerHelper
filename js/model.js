@@ -46,6 +46,9 @@ export function emptyState() {
     items: {},      // canonical books
     placements: {}, // book appearances on the board
     projectOrder: [],
+    // Deletions, so other devices learn about them. Without these, "missing
+    // here, present there" cannot be told apart from "added there".
+    deleted: {},
     ui: {
       activeProjectId: null,
       projectSort: { mode: 'custom', dir: 'asc' },

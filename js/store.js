@@ -18,6 +18,7 @@ import {
   placementsOfGroup,
   siblingPlacements,
 } from './model.js';
+import { addTombstone, pruneTombstones, PORTABLE_SETTINGS } from './merge.js';
 
 const LS_STATE = 'readerHelper.state.v1';
 const LS_SETTINGS = 'readerHelper.settings.v1';
@@ -30,7 +31,7 @@ export const DEFAULT_SETTINGS = {
   todoistApiKey: '',
   githubToken: '',
   gistId: '',
-  gistSyncEnabled: false,
+  gistSyncEnabled: true,
   localPdfHandler: 'zotero', // 'zotero' | 'protocol'
   promptMarkReadAt: 1.0,
   theme: 'auto',
@@ -93,6 +94,15 @@ export function loadFromDisk() {
   try {
     const rawSettings = localStorage.getItem(LS_SETTINGS);
     if (rawSettings) settings = { ...DEFAULT_SETTINGS, ...JSON.parse(rawSettings) };
+    // Sync used to be opt-in, which meant a second computer silently started
+    // its own board. Turn it on once for anyone carrying the old default; a
+    // deliberate later toggle is respected because the flag is then set.
+    if (!settings.syncDefaultsApplied) {
+      settings = { ...settings, gistSyncEnabled: true, syncDefaultsApplied: true };
+      try {
+        localStorage.setItem(LS_SETTINGS, JSON.stringify(settings));
+      } catch { /* ignore */ }
+    }
   } catch (err) {
     console.warn('settings unreadable, using defaults', err);
   }
@@ -125,6 +135,7 @@ function migrate(loaded) {
     prj.groupOrder = (prj.groupOrder || []).filter((gid) => merged.groups[gid]);
   }
   merged.projectOrder = (merged.projectOrder || []).filter((pid) => merged.projects[pid]);
+  merged.deleted = pruneTombstones(merged.deleted || {});
   return merged;
 }
 
@@ -137,13 +148,48 @@ function persist() {
 }
 
 export function saveSettings(patch) {
+  // Only a change to a *portable* setting bumps the stamp, so pasting a local
+  // API key does not make this machine look like the newer authority.
+  const touchesPortable = Object.keys(patch).some(
+    (k) => PORTABLE_SETTINGS.includes(k) && patch[k] !== settings[k],
+  );
   settings = { ...settings, ...patch };
+  if (touchesPortable) settings.settingsModifiedAt = now();
   try {
     localStorage.setItem(LS_SETTINGS, JSON.stringify(settings));
   } catch (err) {
     console.error('could not persist settings', err);
   }
   notify();
+}
+
+/** The settings that travel with the board, for the Gist mirror. */
+export function portableSettings() {
+  const out = {};
+  for (const key of PORTABLE_SETTINGS) {
+    if (settings[key] !== undefined && settings[key] !== '') out[key] = settings[key];
+  }
+  out.settingsModifiedAt = settings.settingsModifiedAt || '';
+  return out;
+}
+
+/** Apply settings that arrived from another machine, without touching secrets. */
+export function applyPortableSettings(incoming) {
+  if (!incoming) return false;
+  const mine = settings.settingsModifiedAt || '';
+  if (incoming.settingsModifiedAt && incoming.settingsModifiedAt <= mine) return false;
+  const patch = {};
+  for (const key of PORTABLE_SETTINGS) {
+    if (incoming[key] !== undefined && incoming[key] !== settings[key]) patch[key] = incoming[key];
+  }
+  if (!Object.keys(patch).length) return false;
+  patch.settingsModifiedAt = incoming.settingsModifiedAt;
+  settings = { ...settings, ...patch };
+  try {
+    localStorage.setItem(LS_SETTINGS, JSON.stringify(settings));
+  } catch { /* ignore */ }
+  notify();
+  return true;
 }
 
 export function replaceState(next, label = 'replace state') {
@@ -228,6 +274,7 @@ export function deleteProject(projectId, { deleteItems = false } = {}) {
     const prj = s.projects[projectId];
     if (!prj) return;
     for (const gid of [...prj.groupOrder]) removeGroupInternal(s, gid, deleteItems);
+    addTombstone(s, 'project', projectId);
     delete s.projects[projectId];
     s.projectOrder = s.projectOrder.filter((id) => id !== projectId);
     if (s.ui.activeProjectId === projectId) {
@@ -313,15 +360,20 @@ function removeGroupInternal(s, groupId, deleteItems) {
   for (const pid of [...g.placementOrder]) {
     const p = s.placements[pid];
     if (!p) continue;
+    addTombstone(s, 'placement', pid);
     delete s.placements[pid];
     const remaining = Object.values(s.placements).some((q) => q.itemId === p.itemId);
-    if (deleteItems && !remaining) delete s.items[p.itemId];
+    if (deleteItems && !remaining) {
+      addTombstone(s, 'item', p.itemId);
+      delete s.items[p.itemId];
+    }
   }
   const prj = s.projects[g.projectId];
   if (prj) {
     prj.groupOrder = prj.groupOrder.filter((id) => id !== groupId);
     touch(prj);
   }
+  addTombstone(s, 'group', groupId);
   delete s.groups[groupId];
 }
 
@@ -503,9 +555,13 @@ export function removePlacement(placementId, { purge = false } = {}) {
       touch(g);
     }
     const itemId = p.itemId;
+    addTombstone(s, 'placement', placementId);
     delete s.placements[placementId];
     const orphaned = !Object.values(s.placements).some((q) => q.itemId === itemId);
-    if (purge || orphaned) delete s.items[itemId];
+    if (purge || orphaned) {
+      addTombstone(s, 'item', itemId);
+      delete s.items[itemId];
+    }
   });
 }
 

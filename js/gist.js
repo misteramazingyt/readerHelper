@@ -42,11 +42,61 @@ export async function verifyToken(cfg) {
   return { login: user.login };
 }
 
+/** A marker in the description so our gist is recognisable among many. */
+export const GIST_MARKER = 'readerHelper board state';
+
+/**
+ * Find the board's gist in the account, without being told its id.
+ *
+ * This is what makes a second computer work. Previously a fresh machine had no
+ * `gistId`, so the first save created a *new* gist and the two devices drifted
+ * apart in silence. Now the id is discovered from the account itself, and a
+ * gist is only created when there genuinely is not one.
+ */
+export async function findStateGist(cfg) {
+  let page = 1;
+  let best = null;
+  while (page <= 5) {
+    const gists = await gh(cfg, `/gists?per_page=100&page=${page}`);
+    if (!Array.isArray(gists) || !gists.length) break;
+    for (const g of gists) {
+      if (!g.files?.[STATE_FILENAME]) continue;
+      // Prefer the most recently updated, in case an old one lingers.
+      if (!best || new Date(g.updated_at) > new Date(best.updated_at)) best = g;
+    }
+    if (gists.length < 100) break;
+    page += 1;
+  }
+  return best ? { id: best.id, updatedAt: best.updated_at, description: best.description } : null;
+}
+
+/**
+ * Resolve the gist to sync with: the configured one, else one found in the
+ * account, else a new one. Returns the id and how it was arrived at.
+ */
+export async function resolveGist(cfg, stateForCreate) {
+  if (cfg.gistId) {
+    try {
+      await gh(cfg, `/gists/${cfg.gistId}`);
+      return { gistId: cfg.gistId, source: 'configured' };
+    } catch (err) {
+      // A stale id (deleted gist, or a token that cannot see it) must not
+      // silently become "create a new one" without saying so.
+      if (err.status !== 404) throw err;
+      console.warn(`configured gist ${cfg.gistId} is gone; looking for another`);
+    }
+  }
+  const found = await findStateGist(cfg);
+  if (found) return { gistId: found.id, source: 'discovered' };
+  const id = await createGist(cfg, stateForCreate);
+  return { gistId: id, source: 'created' };
+}
+
 export async function createGist(cfg, state) {
   const gist = await gh(cfg, '/gists', {
     method: 'POST',
     body: {
-      description: 'readerHelper board state (private)',
+      description: `${GIST_MARKER} (private)`,
       public: false,
       files: { [STATE_FILENAME]: { content: serialise(state) } },
     },
@@ -56,14 +106,28 @@ export async function createGist(cfg, state) {
 
 export async function pushState(cfg, state) {
   if (!cfg.gistId) {
-    const id = await createGist(cfg, state);
-    return { gistId: id, created: true, pushedAt: new Date().toISOString() };
+    // Discovery first: creating unconditionally is how a second machine ends
+    // up with a gist of its own.
+    const { gistId, source } = await resolveGist(cfg, state);
+    if (source !== 'created') {
+      await gh(cfg, `/gists/${gistId}`, {
+        method: 'PATCH',
+        body: { files: { [STATE_FILENAME]: { content: serialise(state) } } },
+      });
+    }
+    return { gistId, created: source === 'created', source, pushedAt: new Date().toISOString() };
   }
-  await gh(cfg, `/gists/${cfg.gistId}`, {
+  const res = await gh(cfg, `/gists/${cfg.gistId}`, {
     method: 'PATCH',
     body: { files: { [STATE_FILENAME]: { content: serialise(state) } } },
   });
-  return { gistId: cfg.gistId, created: false, pushedAt: new Date().toISOString() };
+  return {
+    gistId: cfg.gistId,
+    created: false,
+    source: 'configured',
+    pushedAt: new Date().toISOString(),
+    updatedAt: res?.updated_at || null,
+  };
 }
 
 export async function pullState(cfg) {
