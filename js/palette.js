@@ -184,6 +184,28 @@ const COMMANDS = [
     },
   },
   {
+    id: 'tozotero',
+    slash: '/tozotero',
+    label: 'Add to Zotero',
+    hint: 'selection, or this project',
+    run: () => {
+      const selected = sel.getSelection();
+      if (selected.length) {
+        closePalette();
+        actions.promptPushToZotero(actions.pushEntriesForPlacements(selected));
+        return;
+      }
+      const s = store.getState();
+      const project = s.projects[s.ui.activeProjectId];
+      closePalette();
+      if (!project) {
+        toast('Select a project first.', { type: 'error' });
+        return;
+      }
+      actions.promptPushToZotero(actions.pushEntriesForProject(project.id), project.name);
+    },
+  },
+  {
     id: 'goto',
     slash: '/goto',
     label: 'Go to a project',

@@ -21,6 +21,7 @@ import * as zotero from './zotero.js';
 import * as opener from './open.js';
 import * as metadata from './metadata.js';
 import * as bib from './bibliography.js';
+import * as push from './zotero-push.js';
 import { AUTH } from './auth-config.js';
 import { parseReading, resolveReading, prettyField, pct, fuzzyScore } from './nlp.js';
 import * as sel from './selection.js';
@@ -934,6 +935,207 @@ export async function exportBibliography(items, label = 'bibliography') {
   });
 }
 
+// ====================================================== push back to Zotero
+
+/**
+ * One push entry per placement, not per book: a linked copy sitting in two
+ * groups should be filed into both Zotero subcollections, which is what
+ * mirroring the board actually means.
+ */
+export function pushEntriesForPlacements(placementIds) {
+  const state = store.getState();
+  const seen = new Set();
+  const out = [];
+  for (const pid of placementIds) {
+    const p = state.placements[pid];
+    const item = p && state.items[p.itemId];
+    const group = p && state.groups[p.groupId];
+    const project = group && state.projects[group.projectId];
+    if (!item || !group || !project || item.archived) continue;
+    const dedupe = JSON.stringify([item.id, group.id]);
+    if (seen.has(dedupe)) continue;
+    seen.add(dedupe);
+    out.push({ item, projectName: project.name, groupName: group.name });
+  }
+  return out;
+}
+
+export function pushEntriesForGroup(groupId) {
+  const g = store.getState().groups[groupId];
+  return g ? pushEntriesForPlacements(g.placementOrder) : [];
+}
+
+export function pushEntriesForProject(projectId) {
+  const state = store.getState();
+  const prj = state.projects[projectId];
+  if (!prj) return [];
+  return pushEntriesForPlacements(prj.groupOrder.flatMap((gid) => state.groups[gid]?.placementOrder || []));
+}
+
+/**
+ * The push dialog. Three states in one modal: choose, run, report.
+ *
+ * A preview runs the whole matching pass without writing, so what is about to
+ * happen to the library can be read before it happens.
+ */
+export async function promptPushToZotero(entries, label = '') {
+  const cfg = store.getSettings();
+  if (!cfg.zoteroApiKey || !cfg.zoteroUserId) {
+    toast('Add your Zotero API key and user ID in Settings first.', { type: 'error', timeout: 5000 });
+    return null;
+  }
+  if (!entries.length) {
+    toast('No books to push.', { type: 'error' });
+    return null;
+  }
+
+  const root = cfg.zoteroProjectsRoot || push.DEFAULT_ROOT;
+  const paths = [...new Set(entries.map((e) => [e.projectName, e.groupName].filter(Boolean).join(' / ')))];
+
+  return openModal({
+    title: `Add to Zotero — ${entries.length} book${entries.length === 1 ? '' : 's'}`,
+    width: 'wide',
+    render: (body, close) => {
+      const intro = el('p', 'form__intro');
+      intro.textContent = `Files into ${root} / ${paths.length === 1 ? paths[0] : `${paths.length} collections`}. `
+        + 'Books already in your library are filed into the collection rather than added twice.';
+      body.appendChild(intro);
+
+      const tree = el('pre', 'push__tree');
+      tree.textContent = [
+        root,
+        ...paths.slice(0, 8).map((p) => `  └─ ${p.replace(' / ', '\n       └─ ')}`),
+        paths.length > 8 ? `  … and ${paths.length - 8} more` : null,
+      ].filter(Boolean).join('\n');
+      body.appendChild(tree);
+
+      const replaceWrap = el('label', 'confirm__checkbox');
+      const replaceBox = document.createElement('input');
+      replaceBox.type = 'checkbox';
+      replaceWrap.append(replaceBox, el('span', null,
+        'Also remove these items from their other Zotero collections (a true move)'));
+      body.appendChild(replaceWrap);
+
+      const status = el('div', 'form__status');
+      status.hidden = true;
+      body.appendChild(status);
+
+      const results = el('div', 'push__results');
+      results.hidden = true;
+      body.appendChild(results);
+
+      const actionsRow = el('div', 'form__actions');
+      const spacer = el('div', 'form__spacer');
+      const cancel = el('button', 'btn btn--ghost', 'Cancel');
+      cancel.type = 'button';
+      const preview = el('button', 'btn btn--ghost', 'Preview');
+      preview.type = 'button';
+      const go = el('button', 'btn btn--primary', 'Add to Zotero');
+      go.type = 'button';
+      actionsRow.append(spacer, cancel, preview, go);
+      body.appendChild(actionsRow);
+
+      cancel.addEventListener('click', () => close(null));
+
+      const setStatus = (message, kind = 'busy') => {
+        status.hidden = !message;
+        status.textContent = message || '';
+        status.className = `form__status is-${kind}`;
+      };
+
+      const run = async (dryRun) => {
+        preview.disabled = true;
+        go.disabled = true;
+        results.hidden = true;
+        try {
+          const report = await push.pushToZotero(store.getSettings(), entries, {
+            replaceCollections: replaceBox.checked,
+            dryRun,
+            onProgress: (m) => setStatus(m, 'busy'),
+          });
+          setStatus(
+            dryRun ? 'Preview only — nothing was written.' : 'Done.',
+            dryRun ? 'info' : 'ok',
+          );
+          renderReport(results, report, dryRun);
+          results.hidden = false;
+
+          if (!dryRun) {
+            // Remember the Zotero keys, so the next push recognises its own work.
+            store.batch(() => {
+              for (const row of [...report.created, ...report.filed]) {
+                if (row.key && !row.item.zoteroKey) store.updateItem(row.item.id, { zoteroKey: row.key });
+              }
+            });
+            const n = report.created.length + report.filed.length;
+            toast(
+              `Zotero: ${report.created.length} added, ${report.filed.length} filed`
+              + (report.alreadyThere.length ? `, ${report.alreadyThere.length} already there` : '')
+              + (report.failed.length ? `, ${report.failed.length} failed` : ''),
+              { type: report.failed.length ? 'error' : 'success', timeout: 6000 },
+            );
+            go.textContent = 'Done';
+            cancel.textContent = 'Close';
+            if (!report.failed.length && n >= 0) go.disabled = true;
+            preview.disabled = true;
+            return;
+          }
+        } catch (err) {
+          setStatus(err.message, 'error');
+          errorToast(err, 'Zotero push');
+        } finally {
+          if (dryRun) {
+            preview.disabled = false;
+            go.disabled = false;
+          }
+        }
+      };
+
+      preview.addEventListener('click', () => run(true));
+      go.addEventListener('click', () => run(false));
+    },
+  });
+}
+
+function renderReport(host, report, dryRun) {
+  host.replaceChildren();
+  const verb = dryRun ? 'would be' : 'were';
+
+  const section = (title, rows, describe) => {
+    if (!rows.length) return;
+    const wrap = el('div', 'push__section');
+    wrap.appendChild(el('h4', 'push__heading', `${title} (${rows.length})`));
+    const list = el('ul', 'push__list');
+    for (const row of rows.slice(0, 40)) {
+      const li = el('li', 'push__row');
+      li.append(
+        el('span', 'push__title', truncate(row.item.title, 58)),
+        el('span', 'push__detail', describe(row)),
+      );
+      list.appendChild(li);
+    }
+    if (rows.length > 40) list.appendChild(el('li', 'push__row', `… and ${rows.length - 40} more`));
+    wrap.appendChild(list);
+    host.appendChild(wrap);
+  };
+
+  if (report.createdCollections.length) {
+    const names = report.createdCollections.map((c) => c.name).join(', ');
+    host.appendChild(el('p', 'push__note', `New collection(s) ${verb} created: ${names}`));
+  }
+
+  section(dryRun ? 'Would be added as new items' : 'Added as new items', report.created, (r) => r.where);
+  section(
+    dryRun ? 'Already in your library — would be filed' : 'Already in your library — filed',
+    report.filed,
+    (r) => `${r.reason} → ${r.where}${r.removedFrom?.length ? ` (removed from ${r.removedFrom.length} other)` : ''}`,
+  );
+  section('Already in that collection — nothing to do', report.alreadyThere, (r) => r.reason);
+  section('Failed', report.failed, (r) => r.message);
+
+  if (!host.children.length) host.appendChild(el('p', 'push__note', 'Nothing to do — everything is already where it should be.'));
+}
+
 // ============================================================ context menus
 
 /** Menu for one card, or for the whole selection when the card is part of it. */
@@ -965,6 +1167,11 @@ export function openBookMenu(x, y, placementId) {
     {
       label: many ? `Export bibliography (${itemIds.length})…` : 'Export bibliography…',
       onClick: () => exportBibliography(itemsOfPlacements(ids), many ? `${itemIds.length}-books` : item.title),
+    },
+    {
+      label: many ? `Add ${ids.length} to Zotero…` : 'Add to Zotero…',
+      hint: '01 Projects',
+      onClick: () => promptPushToZotero(pushEntriesForPlacements(ids)),
     },
     { label: many ? 'Duplicate all' : 'Duplicate', hint: 'linked copy', onClick: () => duplicateBooks(ids) },
     { label: 'Move to…', onClick: () => moveBooks(ids) },
@@ -1008,6 +1215,7 @@ export function openGroupMenu(x, y, groupId) {
     { separator: true },
     { label: 'Add to Todoist…', hint: 'Inbox', onClick: () => promptTodoistTaskForContainer(group.name, 'group') },
     { label: 'Export bibliography…', onClick: () => exportBibliography(itemsOfGroup(groupId), group.name) },
+    { label: 'Add group to Zotero…', hint: 'as a subcollection', onClick: () => promptPushToZotero(pushEntriesForGroup(groupId), group.name) },
     { label: 'Duplicate', onClick: () => { store.duplicateGroup(groupId); toast('Group duplicated.'); } },
     {
       label: 'Move to…',
@@ -1040,6 +1248,7 @@ export function openProjectMenu(x, y, projectId) {
     { label: 'Add to Todoist…', hint: 'Inbox', onClick: () => promptTodoistTaskForContainer(project.name, 'project') },
     { label: 'Mirror to Todoist', hint: 'project + sections', onClick: () => mirrorProjectToTodoist(projectId) },
     { label: 'Export bibliography…', hint: 'whole project', onClick: () => exportBibliography(itemsOfProject(projectId), project.name) },
+    { label: 'Add project to Zotero…', hint: 'groups become subcollections', onClick: () => promptPushToZotero(pushEntriesForProject(projectId), project.name) },
     { label: 'Duplicate', onClick: () => { store.duplicateProject(projectId); toast('Project duplicated.'); } },
     { separator: true },
     { label: 'Delete project', danger: true, onClick: () => deleteProjectFlow(projectId) },

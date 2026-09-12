@@ -26,6 +26,7 @@ const UNDO_LIMIT = 50;
 export const DEFAULT_SETTINGS = {
   zoteroApiKey: '',
   zoteroUserId: '',
+  zoteroProjectsRoot: '01 Projects',
   todoistApiKey: '',
   githubToken: '',
   gistId: '',

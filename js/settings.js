@@ -13,6 +13,7 @@ import { allItems } from './store.js';
 import { itemProgress } from './model.js';
 import { pct } from './nlp.js';
 import * as auth from './auth.js';
+import * as zoteroPush from './zotero-push.js';
 
 export function openSettings() {
   const cfg = store.getSettings();
@@ -29,6 +30,9 @@ export function openSettings() {
           field('zoteroApiKey', 'API key', cfg.zoteroApiKey, { type: 'password', autocomplete: 'off' }),
           field('zoteroUserId', 'User ID', cfg.zoteroUserId, { hint: 'The numeric ID shown on the same settings page.' }),
           field('zoteroReadTag', 'Tag applied on "Mark read"', cfg.zoteroReadTag || 'read'),
+          field('zoteroProjectsRoot', 'Collection that projects are pushed into', cfg.zoteroProjectsRoot || '01 Projects', {
+            hint: 'Add to Zotero files books under <this> / <project> / <group>. Created if it does not exist.',
+          }),
           field('zoteroDataDir', 'Zotero data directory', cfg.zoteroDataDir || 'C:\\Users\\Shae\\Zotero', {
             hint: 'Used to build local PDF paths for the readerhelper:// handler.',
           }),
@@ -36,6 +40,18 @@ export function openSettings() {
             hint: 'Only needed if you use linked files rather than stored copies.',
           }),
         ], [
+          button('Rebuild duplicate index', async () => {
+            const busy = showBusy('Re-reading the Zotero library…');
+            try {
+              zoteroPush.clearIndexCache();
+              const index = await zoteroPush.loadIndex(store.getSettings(), { force: true, onProgress: (m) => busy.update(m) });
+              busy.done();
+              toast(`Indexed ${index.entries.length} Zotero items.`, { type: 'success' });
+            } catch (err) {
+              busy.done();
+              errorToast(err, 'Zotero');
+            }
+          }),
           button('Test Zotero', async (values) => {
             const busy = showBusy('Checking Zotero…');
             try {

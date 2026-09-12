@@ -132,6 +132,143 @@ export async function removeTagFromItem(cfg, itemKey, tag) {
   return { changed: true };
 }
 
+// ------------------------------------------------------------- writing back
+
+/**
+ * Create collections. Zotero takes up to 50 at a time and answers with a
+ * per-index result, so partial success is normal and has to be unpacked.
+ *
+ * @param {Array<{name: string, parentCollection?: string}>} specs
+ * @returns {Array<{key: string, name: string}>}
+ */
+export async function createCollections(cfg, specs) {
+  if (!specs.length) return [];
+  const out = [];
+  for (let i = 0; i < specs.length; i += 50) {
+    const chunk = specs.slice(i, i + 50).map((s) => ({
+      name: s.name,
+      parentCollection: s.parentCollection || false,
+    }));
+    const res = await request(cfg, `${libraryPath(cfg)}/collections`, {
+      method: 'POST',
+      body: chunk,
+      headers: { 'Zotero-Write-Token': writeToken() },
+    });
+    unpackWrite(res, chunk, (index, key) => out.push({ key, name: chunk[index].name }));
+  }
+  return out;
+}
+
+/**
+ * Create items. Each may carry a `collections` array of collection keys.
+ * @returns {Array<{key: string, index: number}>}
+ */
+export async function createItems(cfg, items) {
+  if (!items.length) return [];
+  const out = [];
+  for (let i = 0; i < items.length; i += 50) {
+    const chunk = items.slice(i, i + 50);
+    const res = await request(cfg, `${libraryPath(cfg)}/items`, {
+      method: 'POST',
+      body: chunk,
+      headers: { 'Zotero-Write-Token': writeToken() },
+    });
+    unpackWrite(res, chunk, (index, key) => out.push({ key, index: i + index }));
+  }
+  return out;
+}
+
+/**
+ * Put an existing item into a collection.
+ *
+ * Zotero has no "add to collection" call — the item's whole collections array
+ * is rewritten — so this re-reads the item first and merges, or a PATCH would
+ * silently pull the item out of every other collection it belongs to.
+ */
+export async function setItemCollections(cfg, itemKey, collectionKeys, { replace = false } = {}) {
+  const current = await fetchItem(cfg, itemKey);
+  const existing = current.data.collections || [];
+  const next = replace
+    ? [...new Set(collectionKeys)]
+    : [...new Set([...existing, ...collectionKeys])];
+
+  // Nothing to do; do not burn a write or bump the version.
+  if (next.length === existing.length && next.every((k) => existing.includes(k))) {
+    return { changed: false, collections: existing };
+  }
+
+  await request(cfg, `${libraryPath(cfg)}/items/${itemKey}`, {
+    method: 'PATCH',
+    body: { collections: next },
+    headers: { 'If-Unmodified-Since-Version': String(current.version) },
+    raw: true,
+  });
+  return { changed: true, collections: next, removed: existing.filter((k) => !next.includes(k)) };
+}
+
+/** The library's current version, for cheap "has anything changed?" checks. */
+export async function libraryVersion(cfg) {
+  const res = await request(cfg, `${libraryPath(cfg)}/items/top?limit=1&format=versions`, { raw: true });
+  return Number(res.headers.get('Last-Modified-Version') || 0);
+}
+
+/**
+ * Every top-level item in the library, with the library version it reflects.
+ * Pass `since` for an incremental fetch — Zotero then returns only what has
+ * changed, which is what makes keeping a local index affordable.
+ */
+export async function fetchAllTopItems(cfg, { since = null, onProgress } = {}) {
+  const out = [];
+  let start = 0;
+  let version = since || 0;
+  for (;;) {
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), start: String(start) });
+    if (since != null) params.set('since', String(since));
+    const res = await request(cfg, `${libraryPath(cfg)}/items/top?${params}`, { raw: true });
+    const batch = await res.json();
+    const headerVersion = Number(res.headers.get('Last-Modified-Version') || 0);
+    if (headerVersion) version = headerVersion;
+    out.push(...batch);
+    const total = Number(res.headers.get('Total-Results') || out.length);
+    onProgress?.(out.length, total);
+    if (batch.length < PAGE_SIZE || out.length >= total) break;
+    start += PAGE_SIZE;
+  }
+  return { items: out, version };
+}
+
+/** Keys deleted since a version, so a cached index can drop them. */
+export async function fetchDeleted(cfg, since) {
+  const data = await request(cfg, `${libraryPath(cfg)}/deleted?since=${encodeURIComponent(since)}`);
+  return {
+    items: data.items || [],
+    collections: data.collections || [],
+  };
+}
+
+/** Idempotency token: a retried POST will not create the same thing twice. */
+function writeToken() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID().replace(/-/g, '');
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+function unpackWrite(res, chunk, onSuccess) {
+  const success = res.success || {};
+  for (const [index, key] of Object.entries(success)) onSuccess(Number(index), key);
+
+  const failed = res.failed || {};
+  const problems = Object.entries(failed).map(([index, info]) => {
+    const label = chunk[Number(index)]?.name || chunk[Number(index)]?.title || `item ${index}`;
+    return `${label}: ${info.message || info.code}`;
+  });
+  if (problems.length && !Object.keys(success).length) {
+    throw new ZoteroError(`Zotero rejected the write — ${problems.join('; ')}`, 400);
+  }
+  if (problems.length) {
+    console.warn('Zotero partially rejected a write', problems);
+  }
+}
+
 // --------------------------------------------------------------- conversion
 
 const CREATOR_ROLES = ['author', 'editor', 'contributor', 'translator'];
@@ -221,6 +358,99 @@ export async function toItemFields(cfg, row, { withAttachments = true } = {}) {
     console.warn(`attachments unavailable for ${row.key}`, err);
   }
   return fields;
+}
+
+// ------------------------------------------------- board item -> Zotero item
+
+/** Zotero item types this board can produce, and the fields each one allows. */
+const ZOTERO_TYPES = new Set(['book', 'bookSection', 'journalArticle', 'thesis', 'report', 'conferencePaper', 'webpage']);
+
+export function splitCreator(name) {
+  const s = String(name || '').trim();
+  if (!s) return null;
+  if (s.includes(',')) {
+    const [last, ...rest] = s.split(',');
+    return { creatorType: 'author', lastName: last.trim(), firstName: rest.join(',').trim() };
+  }
+  const parts = s.split(/\s+/);
+  if (parts.length === 1) return { creatorType: 'author', name: s };
+  return {
+    creatorType: 'author',
+    firstName: parts.slice(0, -1).join(' '),
+    lastName: parts[parts.length - 1],
+  };
+}
+
+/**
+ * Convert a board item into the JSON Zotero expects.
+ *
+ * Field names are per-itemType in Zotero, and sending a field the type does not
+ * have is rejected outright — a book has `numPages` and no `DOI`, an article has
+ * `DOI` and no `numPages`. A book's DOI therefore goes into `extra`, which is
+ * where Zotero itself puts it.
+ */
+export function toZoteroItem(item, collectionKeys = []) {
+  const itemType = ZOTERO_TYPES.has(item.itemType) ? item.itemType : 'book';
+  const out = {
+    itemType,
+    title: item.title || 'Untitled',
+    creators: (item.authors || []).map(splitCreator).filter(Boolean),
+    abstractNote: item.abstract || '',
+    date: item.year ? String(item.year) : '',
+    url: item.url || '',
+    collections: [...new Set(collectionKeys)],
+    tags: [],
+    extra: '',
+  };
+
+  const extra = [];
+  if (itemType === 'journalArticle' || itemType === 'conferencePaper') {
+    out.publicationTitle = item.container || '';
+    out.volume = item.volume ? String(item.volume) : '';
+    out.issue = item.issue ? String(item.issue) : '';
+    out.pages = item.pages || '';
+    out.DOI = item.doi || '';
+    if (item.isbn) extra.push(`ISBN: ${item.isbn}`);
+  } else if (itemType === 'bookSection') {
+    out.bookTitle = item.container || '';
+    out.publisher = item.publisher || '';
+    out.pages = item.pages || '';
+    out.ISBN = item.isbn || '';
+    if (item.doi) extra.push(`DOI: ${item.doi}`);
+  } else {
+    // book, thesis, report, webpage
+    if (itemType !== 'webpage') {
+      out.publisher = item.publisher || '';
+      out.ISBN = item.isbn || '';
+      if (item.totalPages) out.numPages = String(item.totalPages);
+    }
+    if (item.doi) extra.push(`DOI: ${item.doi}`);
+  }
+
+  // Keep the link back, so a later sync recognises its own work.
+  if (item.citekey) extra.push(`Citation Key: ${item.citekey}`);
+  out.extra = extra.join('\n');
+
+  // Drop empty strings: Zotero accepts them, but they clutter the record.
+  for (const [k, v] of Object.entries(out)) {
+    if (v === '' ) delete out[k];
+  }
+  return out;
+}
+
+/** Pull a DOI out of the Extra field, where Zotero keeps it for books. */
+export function extractDoi(data) {
+  if (data.DOI) return String(data.DOI).trim();
+  const m = String(data.extra || '').match(/^\s*DOI:\s*(\S+)/im);
+  return m ? m[1].trim() : null;
+}
+
+export function extractIsbns(data) {
+  const raw = String(data.ISBN || '');
+  const fromExtra = String(data.extra || '').match(/^\s*ISBN:\s*(.+)$/im)?.[1] || '';
+  return [...raw.split(/[\s,;]+/), ...fromExtra.split(/[\s,;]+/)]
+    .map((s) => s.replace(/[^0-9Xx]/g, '').toUpperCase())
+    .filter((s) => s.length === 10 || s.length === 13);
 }
 
 /** Build a parent -> children index so subcollections can become groups. */

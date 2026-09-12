@@ -38,6 +38,8 @@ jobs:
         run: node scripts/test-worker.mjs
       - name: Citation lookup and bibliography tests
         run: node scripts/test-citation.mjs
+      - name: Zotero push tests
+        run: node scripts/test-push.mjs
       - name: Install jsdom
         run: npm install --no-save --no-audit --no-fund jsdom
       - name: Boot the app and drive it

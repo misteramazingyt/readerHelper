@@ -100,6 +100,55 @@ approximation and the dialog says so when any entry falls back to them.
 
 A book that appears in several groups as a linked copy is exported once.
 
+### Pushing the board back into Zotero
+
+The mirror image of the import. Right-click a **book**, a **selection**, a
+**group** or a **project** -> *Add to Zotero*, or `/tozotero` in the palette.
+
+```
+01 Projects  /  <Project name>  /  <Group name>  /  the books
+                sidebar entry      column
+```
+
+The root collection is `01 Projects` by default and configurable in Settings.
+Anything missing along that path is created; anything already there is reused,
+so pushing twice does not leave two folders of the same name. Matching is
+case-insensitive, and only within the right parent — a `Chapter 1` sitting
+under some unrelated collection is not mistaken for yours.
+
+**Nothing is added twice.** Before creating an item, the library is searched for
+one that is already there, in this order:
+
+| Checked | Trusted because |
+|---|---|
+| the Zotero key, if the book came from Zotero | exact |
+| DOI | exact — including DOIs Zotero keeps in the Extra field, as it does for books |
+| ISBN | exact, hyphens and case ignored |
+| URL | exact, ignoring protocol, `www.`, fragment and trailing slash |
+| title **and** author surname | strong |
+| title **and** year | strong |
+| title alone | only when there is exactly one candidate and nothing to disagree with |
+
+A title shared by two works with different authors or years is **not** matched —
+guessing there would merge two different books, which is worse than a duplicate.
+
+A book already in the library is **filed** into the new collection rather than
+added again. By default it keeps its existing collections; tick *Also remove
+these items from their other Zotero collections* for a true move. That is off by
+default because it cannot be undone from here.
+
+**Preview** runs the entire matching pass and reports what would happen without
+writing anything, which is worth doing the first time.
+
+A linked copy sitting in two groups is created once and filed into both
+subcollections. After a push, each book remembers its Zotero key, so the next
+push recognises its own work.
+
+Duplicate detection needs to know what is in your library, so the first push
+reads it once and caches a compact fingerprint of each item. Later pushes fetch
+only what changed (Zotero's `since` parameter). *Settings -> Rebuild duplicate
+index* forces a full re-read if it ever drifts.
+
 ### Ordering
 
 Projects, groups and books each carry their own view: **Custom** (your
@@ -172,14 +221,14 @@ title. Click it to change, or use the right-click menu.
 **A book** (or the ☰ on the card): open its page · open in Zotero · open the PDF
 · log reading · set the reading mode · **add task to Todoist** (a dialog
 pre-filled with the title, authors, progress, and a link back to the work) ·
-duplicate · move to… · copy to… · **export bibliography** · **mark read** ·
-edit details · remove.
+duplicate · move to… · copy to… · **export bibliography** · **add to Zotero** ·
+**mark read** · edit details · remove.
 
 With several books selected, every one of those applies to the whole selection.
 
 **A group or project**: rename · **add to Todoist** (a `Finish <name>` task
-straight into your Inbox) · **export bibliography** · duplicate · move to… ·
-copy to… · delete.
+straight into your Inbox) · **export bibliography** · **add to Zotero** ·
+duplicate · move to… · copy to… · delete.
 
 Deleting offers to delete the matching Todoist project or section too. It
 **never** touches the linked Zotero collection.
@@ -204,8 +253,9 @@ Click any card. You get, in the manner of opening a Todoist task:
 
 <kbd>Shift</kbd>+<kbd>Space</kbd>.
 
-`/read` `/open` `/pdf` `/zotero` `/markread` `/task` `/export` `/goto` `/book`
-`/group` `/project` `/import` `/sync` `/archive` `/settings` `/help`
+`/read` `/open` `/pdf` `/zotero` `/markread` `/task` `/export` `/tozotero`
+`/goto` `/book` `/group` `/project` `/import` `/sync` `/archive` `/settings`
+`/help`
 
 Without a slash it searches every book, group and project. It also takes whole
 sentences: **`read 30 pages of Capital`** finds the book and logs it in one
@@ -435,6 +485,7 @@ js/
   nlp.js       reading-phrase parser, fuzzy matching
   metadata.js  identifier detection + DOI/ISBN/arXiv/archive.org resolution
   bibliography.js  BibTeX / RIS / CSL-JSON / APA / MLA / Chicago export
+  zotero-push.js   board -> Zotero: collection tree, duplicate matching
   dnd.js       pointer-based drag and drop (mouse + touch)
   render.js    the board          detail.js   the book page
   palette.js   command palette    actions.js  menu and command implementations
@@ -468,12 +519,13 @@ Or push to `main` and set Pages → Source → **GitHub Actions**.
 ## Tests
 
 ```
-node scripts/check.mjs         22 modules — imports and element ids resolve
+node scripts/check.mjs         23 modules — imports and element ids resolve
 node scripts/test-store.mjs    22 tests   — board model, linked duplicates, undo
 node scripts/test-ingest.mjs   12 tests   — Zotero import shape, sync safety
 node scripts/test-worker.mjs   21 tests   — auth worker: allowlist, CORS, secrets, Scholar cache
 node scripts/test-citation.mjs 27 tests   — identifier detection and every export format
-node scripts/test-dom.mjs      38 tests   — boots the real app in jsdom and drives it
+node scripts/test-push.mjs     25 tests   — pushing to Zotero, against a fake Zotero API
+node scripts/test-dom.mjs      41 tests   — boots the real app in jsdom and drives it
 node scripts/test-dnd.mjs      13 tests   — synthesises pointer drags over a fake layout
 node scripts/test-auth.mjs     26 tests   — every outcome of the sign-in gate
 
@@ -507,10 +559,16 @@ applies a deliberate defect, runs the relevant suite, restores the file, and
 reports whether the defect was caught — refusing to claim anything if the edit
 did not actually apply, which is how a green mutation run can otherwise lie.
 
-That harness has already earned its keep twice. It showed that a test for the
-ISBN checksum was passing for the wrong reason (the length regex rejected the
-example before the checksum ran), and that the project-level de-duplication of
-linked copies was untested (the fixture duplicated a book inside one group,
-where a lower-level check already collapsed it).
+That harness has already earned its keep. It showed that a test for the ISBN
+checksum was passing for the wrong reason (the length regex rejected the example
+before the checksum ran), and that the project-level de-duplication of linked
+copies was untested (the fixture duplicated a book inside one group, where a
+lower-level check already collapsed it). It now covers eleven defects across
+matching, escaping, collection lookup and the Zotero push.
+
+`test-push.mjs` stubs `fetch` with a small in-memory Zotero server rather than
+mocking the client module, so the real pagination, the real PATCH-merge and the
+real write-unpacking all run, and the assertions are about the state the library
+ends up in — which is what matters when writing to someone's library.
 
 Everything except the live lookup test runs in CI before every deploy.

@@ -564,6 +564,67 @@ await check('Export bibliography appears in the group and project menus', async 
   await tick(10);
 });
 
+await check('Add to Zotero appears on books, groups and projects', async () => {
+  $('.card').dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 20 }));
+  await tick(20);
+  ok($$('.context-menu__item').some((n) => n.textContent.includes('Add to Zotero')), 'book menu');
+  key('Escape');
+  await tick(10);
+
+  $('.column').dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 30 }));
+  await tick(20);
+  ok($$('.context-menu__item').some((n) => n.textContent.includes('Add group to Zotero')), 'group menu');
+  key('Escape');
+  await tick(10);
+
+  $('.project-row').dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 30 }));
+  await tick(20);
+  ok($$('.context-menu__item').some((n) => n.textContent.includes('Add project to Zotero')), 'project menu');
+  key('Escape');
+  await tick(10);
+});
+
+await check('push entries carry the project and group each book sits in', () => {
+  const s = storeMod.getState();
+  const projectId = s.ui.activeProjectId;
+  const project = s.projects[projectId];
+  const entries = actionsMod.pushEntriesForProject(projectId);
+  ok(entries.length > 0, 'some entries');
+  for (const e of entries) {
+    eq(e.projectName, project.name, 'project name attached');
+    ok(project.groupOrder.some((gid) => s.groups[gid].name === e.groupName), 'group name is a real group');
+    ok(e.item && e.item.title, 'carries the book');
+  }
+  // A linked copy must yield one entry per group it sits in — unlike the
+  // bibliography export, which counts each book once. Make one here rather
+  // than relying on another test having run first.
+  const groups = project.groupOrder;
+  const source = s.groups[groups[0]].placementOrder[0];
+  const other = groups.find((g) => g !== groups[0]);
+  const copy = storeMod.duplicatePlacement(source, other);
+
+  const after = actionsMod.pushEntriesForProject(projectId);
+  eq(after.length, entries.length + 1, 'the copy added an entry');
+  const copiedItemId = storeMod.getState().placements[copy.id].itemId;
+  const forThatBook = after.filter((e) => e.item.id === copiedItemId);
+  eq(forThatBook.length, 2, 'one entry per group');
+  eq(
+    new Set(forThatBook.map((e) => e.groupName)).size, 2,
+    'and they name different groups',
+  );
+  storeMod.removePlacement(copy.id);
+});
+
+await check('the push dialog refuses politely when Zotero is not configured', async () => {
+  const s = storeMod.getState();
+  await actionsMod.promptPushToZotero(actionsMod.pushEntriesForProject(s.ui.activeProjectId));
+  await tick(20);
+  ok(!$('.push__tree'), 'no dialog opened');
+  const toastText = $$('.toast').map((t) => t.textContent).join(' ');
+  ok(toastText.includes('Zotero'), `said why (got: ${toastText.slice(0, 80)})`);
+  $$('.toast').forEach((t) => t.remove());
+});
+
 await check('the export dialog produces BibTeX for a whole group', async () => {
   const s = storeMod.getState();
   const groupId = s.projects[s.ui.activeProjectId].groupOrder[0];
