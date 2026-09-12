@@ -206,6 +206,38 @@ const COMMANDS = [
     },
   },
   {
+    id: 'goodreads',
+    slash: '/goodreads',
+    label: 'Import from Goodreads',
+    hint: 'CSV export, or a public shelf',
+    run: () => {
+      closePalette();
+      actions.promptGoodreadsImport();
+    },
+  },
+  {
+    id: 'togoodreads',
+    slash: '/togoodreads',
+    label: 'Add to Goodreads',
+    hint: 'CSV for their importer',
+    run: () => {
+      const selected = sel.getSelection();
+      const s = store.getState();
+      const project = s.projects[s.ui.activeProjectId];
+      closePalette();
+      if (selected.length) {
+        actions.exportForGoodreads(actions.goodreadsEntriesForPlacements(selected), `${selected.length}-books`);
+      } else if (project) {
+        actions.exportForGoodreads(
+          actions.pushEntriesForProject(project.id).map((e) => ({ item: e.item, groupName: e.groupName })),
+          project.name,
+        );
+      } else {
+        toast('Select a project first.', { type: 'error' });
+      }
+    },
+  },
+  {
     id: 'goto',
     slash: '/goto',
     label: 'Go to a project',

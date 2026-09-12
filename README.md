@@ -149,6 +149,49 @@ reads it once and caches a compact fingerprint of each item. Later pushes fetch
 only what changed (Zotero's `since` parameter). *Settings -> Rebuild duplicate
 index* forces a full re-read if it ever drifts.
 
+### Goodreads
+
+Goodreads **retired its public API** — no new developer keys since December
+2020, and it was deprecated rather than replaced. Nobody can build a read/write
+integration like the Zotero one. What is left is still useful:
+
+**In — a shelf, live.** *G* in the sidebar, or `/goodreads`. Reads your shelf
+RSS feeds, which still work and carry title, author, ISBN, page count, year,
+your rating, read date, review and shelves. Needs your numeric user ID (the
+digits in `goodreads.com/user/show/12345678-name`) and a **public** profile.
+
+Goodreads sends no CORS headers, so this goes through your Worker. The Worker
+builds the Goodreads URL itself from a numeric id and a shelf name — it never
+forwards a URL you hand it, which would make it an open proxy for anything
+reachable from Cloudflare's network. Responses are cached for ten minutes.
+
+**In — the whole library.** The same dialog takes the CSV from Goodreads → *My
+Books* → *Import and export* → *Export Library*. Complete, includes private
+shelves, needs no setup and no public profile.
+
+Either way you choose what becomes a group:
+
+| Group by | Result |
+|---|---|
+| Reading status | **To read** / **Reading now** / **Read** |
+| Your shelves | one group per shelf; a book on three shelves gets a card in each |
+| One group | everything together |
+
+A book already on the board is **matched, not duplicated** — Goodreads id, then
+ISBN, then title with an author. Import is additive: it fills in blanks and
+records your Goodreads rating, but **never overwrites reading progress, notes or
+tasks kept here**. Importing the same file twice changes nothing.
+
+**Out.** Right-click a book, selection, group or project → *Add to Goodreads*,
+or `/togoodreads`. Goodreads has no write API either, so this produces a CSV in
+the shape their importer accepts; upload it at
+[goodreads.com/review/import](https://www.goodreads.com/review/import). Group
+names become shelves, finished books land on `read` with their date, and your
+notes can go along as the review. Their importer matches on ISBN first, so the
+dialog tells you how many of the selected books have one.
+
+Each book also gets **Open in Goodreads** in its menu.
+
 ### Ordering
 
 Projects, groups and books each carry their own view: **Custom** (your
@@ -254,8 +297,8 @@ Click any card. You get, in the manner of opening a Todoist task:
 <kbd>Shift</kbd>+<kbd>Space</kbd>.
 
 `/read` `/open` `/pdf` `/zotero` `/markread` `/task` `/export` `/tozotero`
-`/goto` `/book` `/group` `/project` `/import` `/sync` `/archive` `/settings`
-`/help`
+`/goodreads` `/togoodreads` `/goto` `/book` `/group` `/project` `/import`
+`/sync` `/archive` `/settings` `/help`
 
 Without a slash it searches every book, group and project. It also takes whole
 sentences: **`read 30 pages of Capital`** finds the book and logs it in one
@@ -523,6 +566,8 @@ js/
   zotero-push.js   board -> Zotero: collection tree, duplicate matching
   merge.js     record-level merge + tombstones, for two machines
   boardsync.js the pull-merge-push loop and its triggers
+  goodreads.js     their CSV and RSS in, their import CSV out
+  goodreads-ingest.js  grouping, matching, and applying to the board
   dnd.js       pointer-based drag and drop (mouse + touch)
   render.js    the board          detail.js   the book page
   palette.js   command palette    actions.js  menu and command implementations
@@ -556,13 +601,14 @@ Or push to `main` and set Pages → Source → **GitHub Actions**.
 ## Tests
 
 ```
-node scripts/check.mjs         25 modules — imports and element ids resolve
+node scripts/check.mjs         27 modules — imports and element ids resolve
 node scripts/test-store.mjs    22 tests   — board model, linked duplicates, undo
 node scripts/test-ingest.mjs   12 tests   — Zotero import shape, sync safety
-node scripts/test-worker.mjs   21 tests   — auth worker: allowlist, CORS, secrets, Scholar cache
+node scripts/test-worker.mjs   27 tests   — auth worker: allowlist, CORS, secrets, Scholar cache
 node scripts/test-citation.mjs 27 tests   — identifier detection and every export format
 node scripts/test-push.mjs     25 tests   — pushing to Zotero, against a fake Zotero API
 node scripts/test-sync.mjs     24 tests   — the merge, and the pull-merge-push loop
+node scripts/test-goodreads.mjs 33 tests  — their CSV, their RSS, and the CSV they import
 node scripts/test-dom.mjs      41 tests   — boots the real app in jsdom and drives it
 node scripts/test-dnd.mjs      13 tests   — synthesises pointer drags over a fake layout
 node scripts/test-auth.mjs     26 tests   — every outcome of the sign-in gate
@@ -603,8 +649,9 @@ before the checksum ran), and that the project-level de-duplication of linked
 copies was untested (the fixture duplicated a book inside one group, where a
 lower-level check already collapsed it). It now covers eleven defects across
 matching, escaping, collection lookup, the Zotero push and cross-device sync —
-seventeen defects in all, including "sync overwrites instead of merging" and "a
-new machine creates its own Gist", the two that would quietly cost real work.
+twenty-two defects in all, including "sync overwrites instead of merging", "a
+new machine creates its own Gist", and "the shelf proxy trusts a caller-supplied
+URL" — the ones that would quietly cost real work or open a hole.
 
 `test-push.mjs` stubs `fetch` with a small in-memory Zotero server rather than
 mocking the client module, so the real pagination, the real PATCH-merge and the

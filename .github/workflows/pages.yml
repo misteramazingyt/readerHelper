@@ -42,6 +42,8 @@ jobs:
         run: node scripts/test-push.mjs
       - name: Cross-device sync tests
         run: node scripts/test-sync.mjs
+      - name: Goodreads tests
+        run: node scripts/test-goodreads.mjs
       - name: Install jsdom
         run: npm install --no-save --no-audit --no-fund jsdom
       - name: Boot the app and drive it

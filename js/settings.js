@@ -67,6 +67,15 @@ export function openSettings() {
           }),
         ]),
 
+        section('Goodreads', 'Goodreads retired its API in 2020, so there is no key. Shelf sync reads the public RSS feed through your worker; the CSV route needs nothing at all.', [
+          field('goodreadsUserId', 'Goodreads user ID', cfg.goodreadsUserId, {
+            hint: 'The digits in your profile URL: goodreads.com/user/show/12345678-name. Shelf sync only works if the profile is public.',
+          }),
+          field('goodreadsShelves', 'Shelves to sync', cfg.goodreadsShelves || 'read, currently-reading, to-read', {
+            hint: 'Comma-separated. Custom shelf names work too.',
+          }),
+        ]),
+
         section('Todoist', 'Copy your token from Todoist → Settings → Integrations → Developer.', [
           field('todoistApiKey', 'API token', cfg.todoistApiKey, { type: 'password', autocomplete: 'off' }),
         ], [

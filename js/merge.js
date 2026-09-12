@@ -25,6 +25,8 @@ export const PORTABLE_SETTINGS = [
   'zoteroReadTag',
   'zoteroProjectsRoot',
   'promptMarkReadAt',
+  'goodreadsUserId',
+  'goodreadsShelves',
   'theme',
   'bibFormat',
 ];

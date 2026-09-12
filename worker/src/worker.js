@@ -65,6 +65,9 @@ export default {
     if (url.pathname === '/scholar' && request.method === 'POST') {
       return handleScholar(request, env, ctx, corsOrigin);
     }
+    if (url.pathname === '/goodreads' && request.method === 'POST') {
+      return handleGoodreads(request, env, ctx, corsOrigin);
+    }
 
     return json({ error: 'not_found' }, 404, corsOrigin);
   },
@@ -294,6 +297,90 @@ function normaliseScholarRow(row) {
     citedBy: row.inline_links?.cited_by?.total ?? null,
     source: 'Google Scholar',
   };
+}
+
+// ---------------------------------------------------------------- goodreads
+
+const GOODREADS_SHELVES = /^[a-z0-9][a-z0-9 _-]{0,48}$/i;
+
+/**
+ * Proxy a Goodreads shelf RSS feed.
+ *
+ * Goodreads retired its API, but the per-shelf RSS feeds still work — they just
+ * send no CORS headers, so a browser on the Pages origin cannot read them. This
+ * adds the headers and nothing else; no key is involved, and the feed is only
+ * readable at all if the profile is public.
+ *
+ * The URL is *built here* from a numeric id and a shelf name rather than taken
+ * from the caller. Forwarding a caller-supplied URL would turn this worker into
+ * an open proxy for anything reachable from Cloudflare's network.
+ */
+async function handleGoodreads(request, env, ctx, corsOrigin) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: 'bad_request' }, 400, corsOrigin);
+  }
+
+  const userId = String(body.userId || '').trim();
+  if (!/^\d{1,12}$/.test(userId)) {
+    return json({
+      error: 'bad_request',
+      message: 'A Goodreads numeric user id is required (the digits in your profile URL).',
+    }, 400, corsOrigin);
+  }
+  const shelf = String(body.shelf || 'read').trim();
+  if (!GOODREADS_SHELVES.test(shelf)) {
+    return json({ error: 'bad_request', message: `Not a valid shelf name: ${shelf}` }, 400, corsOrigin);
+  }
+  const page = Math.min(Math.max(parseInt(body.page, 10) || 1, 1), 50);
+
+  const target = `https://www.goodreads.com/review/list_rss/${userId}`
+    + `?shelf=${encodeURIComponent(shelf)}&page=${page}&per_page=100`;
+
+  const cacheKey = new Request(`https://goodreads.cache/${userId}/${encodeURIComponent(shelf)}/${page}`);
+  const cache = caches.default;
+  const hit = await cache.match(cacheKey);
+  if (hit) {
+    const cached = await hit.json();
+    return json({ ...cached, cached: true }, 200, corsOrigin);
+  }
+
+  let xml;
+  try {
+    const res = await fetch(target, { headers: { 'User-Agent': UA, Accept: 'application/rss+xml, application/xml' } });
+    if (res.status === 404) {
+      return json({
+        error: 'not_found',
+        message: 'Goodreads returned nothing for that id and shelf. Is the profile public?',
+      }, 404, corsOrigin);
+    }
+    if (!res.ok) {
+      return json({ error: 'goodreads_error', message: `Goodreads returned ${res.status}.` }, 502, corsOrigin);
+    }
+    xml = await res.text();
+  } catch (err) {
+    return json({ error: 'goodreads_unreachable', message: String(err) }, 502, corsOrigin);
+  }
+
+  // A private profile answers 200 with an empty feed rather than an error.
+  const count = (xml.match(/<item>/g) || []).length;
+  if (!count && page === 1) {
+    return json({
+      xml,
+      count: 0,
+      page,
+      shelf,
+      warning: 'That shelf came back empty. Goodreads only publishes RSS for public profiles.',
+    }, 200, corsOrigin);
+  }
+
+  const payload = { xml, count, page, shelf };
+  ctx.waitUntil(cache.put(cacheKey, new Response(JSON.stringify(payload), {
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'max-age=600' },
+  })));
+  return json(payload, 200, corsOrigin);
 }
 
 // ------------------------------------------------------------------- helpers

@@ -22,6 +22,8 @@ import * as opener from './open.js';
 import * as metadata from './metadata.js';
 import * as bib from './bibliography.js';
 import * as push from './zotero-push.js';
+import * as goodreads from './goodreads.js';
+import * as gi from './goodreads-ingest.js';
 import { AUTH } from './auth-config.js';
 import { parseReading, resolveReading, prettyField, pct, fuzzyScore } from './nlp.js';
 import * as sel from './selection.js';
@@ -1136,6 +1138,231 @@ function renderReport(host, report, dryRun) {
   if (!host.children.length) host.appendChild(el('p', 'push__note', 'Nothing to do — everything is already where it should be.'));
 }
 
+// ================================================================ Goodreads
+
+/**
+ * Import from Goodreads.
+ *
+ * Two routes, because Goodreads left exactly two open: the library CSV export
+ * (complete, private shelves included, no setup) and the per-shelf RSS feed
+ * (live and repeatable, but only for a public profile, and only through the
+ * worker since goodreads.com sends no CORS headers).
+ */
+export async function promptGoodreadsImport() {
+  const cfg = store.getSettings();
+  let csvBooks = null;
+  let csvName = '';
+
+  const values = await openForm({
+    title: 'Import from Goodreads',
+    submitLabel: 'Import',
+    width: 'wide',
+    intro: 'Goodreads retired its API in 2020, so there is no key to paste. Either upload the CSV it still exports, or sync a shelf from a public profile.',
+    fields: [
+      {
+        name: 'projectName',
+        label: 'Import into project',
+        value: gi.DEFAULT_PROJECT,
+        required: true,
+        hint: 'Reused if a project of this name already exists.',
+      },
+      {
+        name: 'groupBy',
+        label: 'Make groups from',
+        type: 'select',
+        value: 'shelf',
+        options: [
+          { value: 'shelf', label: 'Reading status — To read / Reading now / Read' },
+          { value: 'shelves', label: 'Your shelves — a book on three shelves lands in three groups' },
+          { value: 'single', label: 'One group for everything' },
+        ],
+      },
+      { name: 'shelves', label: 'Shelves to sync (RSS)', value: cfg.goodreadsShelves || 'read, currently-reading, to-read' },
+      {
+        name: 'userId',
+        label: 'Goodreads user ID (RSS only)',
+        value: cfg.goodreadsUserId,
+        hint: 'The digits in goodreads.com/user/show/12345678-name. Leave blank if you are uploading a CSV.',
+      },
+    ],
+    extraActions: [
+      {
+        label: 'Choose CSV file…',
+        onClick: async (_readValues, _close, _controls, api) => {
+          const file = await pickFile('.csv,text/csv');
+          if (!file) return;
+          api.setStatus(`Reading ${file.name}…`, 'busy');
+          try {
+            const { books, error } = goodreads.parseLibraryCsv(await file.text());
+            if (error) {
+              api.setStatus(error, 'error');
+              csvBooks = null;
+              return;
+            }
+            csvBooks = books;
+            csvName = file.name;
+            const shelved = new Set(books.map((b) => b.goodreadsShelf).filter(Boolean));
+            api.setStatus(
+              `${books.length} books in ${file.name}${shelved.size ? ` across ${shelved.size} reading states` : ''}. Press Import.`,
+              'ok',
+            );
+          } catch (err) {
+            api.setStatus(`Could not read that file: ${err.message}`, 'error');
+          }
+        },
+      },
+    ],
+    validate: (v) => {
+      if (!csvBooks && !v.userId) {
+        return { userId: 'Either choose a CSV file, or give a user ID to sync a shelf.' };
+      }
+      return null;
+    },
+  });
+  if (!values) return null;
+
+  const busy = showBusy('Importing from Goodreads…');
+  try {
+    let books = csvBooks;
+    let source = csvName;
+
+    if (!books) {
+      // RSS route: one request per shelf, through the worker.
+      const shelves = String(values.shelves || 'read')
+        .split(',').map((s) => s.trim()).filter(Boolean);
+      books = [];
+      for (const shelf of shelves) {
+        const res = await goodreads.fetchShelf(AUTH.workerUrl, values.userId, shelf, {
+          onProgress: (m) => busy.update(m),
+        });
+        if (res.warning && !res.books.length) {
+          busy.done();
+          toast(res.warning, { type: 'error', timeout: 7000 });
+          return null;
+        }
+        // The feed knows its own shelf; the CSV carries it per row.
+        for (const b of res.books) {
+          books.push({ ...b, goodreadsShelf: shelf, goodreadsShelves: b.goodreadsShelves });
+        }
+      }
+      source = `${shelves.length} shelf/shelves`;
+      store.saveSettings({ goodreadsUserId: values.userId, goodreadsShelves: values.shelves });
+    }
+
+    if (!books.length) {
+      busy.done();
+      toast('Nothing to import — no books came back.', { type: 'error' });
+      return null;
+    }
+
+    busy.update(`Placing ${books.length} books…`);
+    const entries = gi.planGroups(books, {
+      groupBy: values.groupBy,
+      defaultGroup: gi.UNSHELVED,
+    });
+    const report = store.commit('import from goodreads', (s) => gi.applyGoodreads(s, entries, {
+      projectName: values.projectName,
+    }));
+    store.setActiveProject(report.projectId);
+    busy.done();
+
+    toast(
+      `Goodreads (${source}): ${report.added} new, ${report.linked} already here`
+      + (report.groups ? `, ${report.groups} group(s) created` : ''),
+      { type: 'success', timeout: 7000 },
+    );
+    return report;
+  } catch (err) {
+    busy.done();
+    errorToast(err, 'Goodreads import');
+    return null;
+  }
+}
+
+function pickFile(accept) {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.addEventListener('change', () => resolve(input.files?.[0] || null), { once: true });
+    input.click();
+  });
+}
+
+/**
+ * Produce a CSV in the shape Goodreads' importer accepts.
+ *
+ * This is the write direction, and it is a file rather than a request because
+ * uploading at goodreads.com/review/import is the only route they still offer.
+ */
+export async function exportForGoodreads(entries, label = 'readerHelper') {
+  if (!entries.length) {
+    toast('Nothing to send to Goodreads.', { type: 'error' });
+    return null;
+  }
+  const withIsbn = entries.filter((e) => e.item.isbn).length;
+
+  const values = await openForm({
+    title: `Add ${entries.length} book${entries.length === 1 ? '' : 's'} to Goodreads`,
+    submitLabel: 'Download CSV',
+    width: 'wide',
+    intro: 'Goodreads has no write API, so this produces the CSV their importer takes. Download it, then upload it at goodreads.com/review/import.',
+    fields: [
+      {
+        name: 'shelfFromGroup',
+        label: 'Shelve each book under its group name',
+        type: 'checkbox',
+        value: true,
+        hint: 'Group names become Goodreads shelves, lowercased and hyphenated.',
+      },
+      { name: 'markRead', label: 'Put finished books on the "read" shelf', type: 'checkbox', value: true },
+      { name: 'includeReviews', label: 'Include your notes as the review', type: 'checkbox', value: false },
+      {
+        name: 'note',
+        type: 'static',
+        label: 'With an ISBN',
+        value: `${withIsbn} of ${entries.length} — Goodreads matches on ISBN first, then title and author.`,
+      },
+    ],
+  });
+  if (!values) return null;
+
+  const rows = entries.map(({ item, groupName }) => ({
+    item,
+    shelves: values.shelfFromGroup && groupName ? [goodreads.toShelfName(groupName)] : [],
+  }));
+  const csv = goodreads.toImportCsv(rows, {
+    includeReviews: values.includeReviews,
+    markRead: values.markRead,
+  });
+
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `goodreads-${goodreads.toShelfName(label)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+
+  toast(`Saved ${a.download}. Upload it at goodreads.com/review/import.`, { type: 'success', timeout: 8000 });
+  return csv;
+}
+
+/** Entries for the Goodreads CSV: one row per book, tagged with its group. */
+export function goodreadsEntriesForPlacements(placementIds) {
+  return pushEntriesForPlacements(placementIds).map((e) => ({ item: e.item, groupName: e.groupName }));
+}
+
+export function openGoodreads(item) {
+  const url = goodreads.bookUrl(item);
+  if (!url) {
+    toast('Nothing to look up on Goodreads.', { type: 'error' });
+    return;
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
 // ============================================================ context menus
 
 /** Menu for one card, or for the whole selection when the card is part of it. */
@@ -1152,6 +1379,7 @@ export function openBookMenu(x, y, placementId) {
     { heading: many ? `${ids.length} books selected` : truncate(item.title, 42) },
     !many && { label: 'Open book page', onClick: () => window.dispatchEvent(new CustomEvent('rh:open-item', { detail: { itemId: item.id } })) },
     !many && opener.hasZoteroLink(item) && { label: 'Open in Zotero', onClick: () => reportOpen(opener.openInZotero(item)) },
+    !many && goodreads.hasGoodreadsLink(item) && { label: 'Open in Goodreads', onClick: () => openGoodreads(item) },
     !many && opener.hasPdfLink(item) && { label: 'Open PDF', hint: item.currentPage ? `p. ${opener.resumePage(item)}` : '', onClick: () => reportOpen(opener.openLocalPdf(item, store.getSettings())) },
     { separator: true },
     { label: many ? `Log reading for ${ids.length}…` : 'Log reading…', onClick: () => (many ? logReadingForMany(itemIds) : promptReading(item.id)) },
@@ -1172,6 +1400,11 @@ export function openBookMenu(x, y, placementId) {
       label: many ? `Add ${ids.length} to Zotero…` : 'Add to Zotero…',
       hint: '01 Projects',
       onClick: () => promptPushToZotero(pushEntriesForPlacements(ids)),
+    },
+    {
+      label: many ? `Add ${ids.length} to Goodreads…` : 'Add to Goodreads…',
+      hint: 'CSV to upload',
+      onClick: () => exportForGoodreads(goodreadsEntriesForPlacements(ids), item.title),
     },
     { label: many ? 'Duplicate all' : 'Duplicate', hint: 'linked copy', onClick: () => duplicateBooks(ids) },
     { label: 'Move to…', onClick: () => moveBooks(ids) },
@@ -1216,6 +1449,7 @@ export function openGroupMenu(x, y, groupId) {
     { label: 'Add to Todoist…', hint: 'Inbox', onClick: () => promptTodoistTaskForContainer(group.name, 'group') },
     { label: 'Export bibliography…', onClick: () => exportBibliography(itemsOfGroup(groupId), group.name) },
     { label: 'Add group to Zotero…', hint: 'as a subcollection', onClick: () => promptPushToZotero(pushEntriesForGroup(groupId), group.name) },
+    { label: 'Add group to Goodreads…', hint: 'CSV to upload', onClick: () => exportForGoodreads(pushEntriesForGroup(groupId).map((e) => ({ item: e.item, groupName: e.groupName })), group.name) },
     { label: 'Duplicate', onClick: () => { store.duplicateGroup(groupId); toast('Group duplicated.'); } },
     {
       label: 'Move to…',
@@ -1249,6 +1483,7 @@ export function openProjectMenu(x, y, projectId) {
     { label: 'Mirror to Todoist', hint: 'project + sections', onClick: () => mirrorProjectToTodoist(projectId) },
     { label: 'Export bibliography…', hint: 'whole project', onClick: () => exportBibliography(itemsOfProject(projectId), project.name) },
     { label: 'Add project to Zotero…', hint: 'groups become subcollections', onClick: () => promptPushToZotero(pushEntriesForProject(projectId), project.name) },
+    { label: 'Add project to Goodreads…', hint: 'CSV to upload', onClick: () => exportForGoodreads(pushEntriesForProject(projectId).map((e) => ({ item: e.item, groupName: e.groupName })), project.name) },
     { label: 'Duplicate', onClick: () => { store.duplicateProject(projectId); toast('Project duplicated.'); } },
     { separator: true },
     { label: 'Delete project', danger: true, onClick: () => deleteProjectFlow(projectId) },

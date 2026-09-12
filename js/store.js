@@ -28,6 +28,8 @@ export const DEFAULT_SETTINGS = {
   zoteroApiKey: '',
   zoteroUserId: '',
   zoteroProjectsRoot: '01 Projects',
+  goodreadsUserId: '',
+  goodreadsShelves: 'read, currently-reading, to-read',
   todoistApiKey: '',
   githubToken: '',
   gistId: '',

@@ -108,6 +108,12 @@ export function newItem(fields = {}) {
     issue: null,
     pages: null,       // the range within a container, e.g. "45-71"
     abstract: null,
+    // Goodreads linkage
+    goodreadsId: null,
+    goodreadsRating: null,   // 1-5, as you rated it there
+    goodreadsShelves: [],
+    dateRead: null,
+    dateAdded: null,
     // Zotero linkage
     zoteroKey: null,
     zoteroLibrary: null, // e.g. "users/12345"

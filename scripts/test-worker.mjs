@@ -325,6 +325,96 @@ await check('a too-short scholar query is rejected before it costs anything', as
   eq(calls, 0, 'no search performed');
 });
 
+// -------------------------------------------------------------- goodreads
+
+const grPost = (body) => worker.fetch(
+  new Request('https://auth.example.workers.dev/goodreads', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Origin: APP_ORIGIN },
+    body: JSON.stringify(body),
+  }),
+  ENV, { waitUntil: (p) => p },
+);
+
+await check('a goodreads shelf is proxied with CORS added', async () => {
+  cacheStore.clear();
+  let called = '';
+  globalThis.fetch = async (url) => {
+    called = String(url);
+    return new Response('<rss><channel><item><title>A</title></item></channel></rss>', { status: 200 });
+  };
+  const res = await grPost({ userId: '12345678', shelf: 'read', page: 1 });
+  eq(res.status, 200, 'ok');
+  eq(res.headers.get('Access-Control-Allow-Origin'), APP_ORIGIN, 'CORS added — the whole point');
+  const body = await res.json();
+  eq(body.count, 1, 'counted the items');
+  ok(called.startsWith('https://www.goodreads.com/review/list_rss/12345678'), `built the URL itself (got ${called})`);
+  ok(called.includes('shelf=read'), 'with the shelf');
+});
+
+await check('the proxy will not fetch a URL the caller supplies', async () => {
+  // Forwarding a caller-supplied URL would make this an open proxy for
+  // anything reachable from Cloudflare's network.
+  cacheStore.clear();
+  let called = false;
+  globalThis.fetch = async () => { called = true; return new Response('', { status: 200 }); };
+
+  for (const evil of [
+    'http://169.254.169.254/latest/meta-data/',
+    '../../admin',
+    '12345678/../../x',
+    'not-a-number',
+    '',
+  ]) {
+    const res = await grPost({ userId: evil, shelf: 'read' });
+    eq(res.status, 400, `refused ${JSON.stringify(evil)}`);
+  }
+  eq(called, false, 'nothing was fetched');
+});
+
+await check('a shelf name that is not a shelf name is refused', async () => {
+  cacheStore.clear();
+  let called = false;
+  globalThis.fetch = async () => { called = true; return new Response('', { status: 200 }); };
+  const res = await grPost({ userId: '1', shelf: '../../../etc/passwd' });
+  eq(res.status, 400, 'refused');
+  eq(called, false, 'no request made');
+});
+
+await check('a private profile is explained rather than reported as success', async () => {
+  cacheStore.clear();
+  globalThis.fetch = async () => new Response('<rss><channel></channel></rss>', { status: 200 });
+  const body = await (await grPost({ userId: '1', shelf: 'read' })).json();
+  eq(body.count, 0, 'no books');
+  ok(body.warning?.includes('public'), `says why (got ${body.warning})`);
+});
+
+await check('a repeated shelf request is served from cache', async () => {
+  cacheStore.clear();
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response('<rss><channel><item><title>A</title></item></channel></rss>', { status: 200 });
+  };
+  await grPost({ userId: '1', shelf: 'read', page: 1 });
+  const second = await grPost({ userId: '1', shelf: 'read', page: 1 });
+  eq(calls, 1, 'Goodreads hit once');
+  eq((await second.json()).cached, true, 'second answer came from cache');
+});
+
+await check('the page number is clamped rather than trusted', async () => {
+  cacheStore.clear();
+  let called = '';
+  globalThis.fetch = async (url) => {
+    called = String(url);
+    return new Response('<rss><channel><item></item></channel></rss>', { status: 200 });
+  };
+  await grPost({ userId: '1', shelf: 'read', page: 99999 });
+  ok(called.includes('page=50'), `clamped to 50 (got ${called})`);
+  cacheStore.clear();
+  await grPost({ userId: '1', shelf: 'read', page: -3 });
+  ok(called.includes('page=1'), 'a negative page becomes 1');
+});
+
 // -------------------------------------------------------------------- health
 
 await check('health reports configuration without revealing it', async () => {

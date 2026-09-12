@@ -129,6 +129,45 @@ const MUTATIONS = [
     suite: 'test-sync.mjs',
   },
   {
+    name: 'Goodreads read dates slip a day via local-time getters',
+    file: 'js/goodreads.js',
+    // The day-of-month getter is the one that actually shifts: swapping it for
+    // the local-time version is exactly the bug that shipped a read date one
+    // day early west of Greenwich.
+    find: 'd.getUTCDate()',
+    replace: 'd.getDate()',
+    suite: 'test-goodreads.mjs',
+    env: { TZ: 'America/Los_Angeles' },
+  },
+  {
+    name: 'the CSV reader stops honouring quoted fields',
+    file: 'js/goodreads.js',
+    find: "    if (c === '\"') { quoted = true; continue; }",
+    replace: '',
+    suite: 'test-goodreads.mjs',
+  },
+  {
+    name: 'Goodreads import stops de-duplicating against the board',
+    file: 'js/goodreads-ingest.js',
+    find: '    const existing = findExisting(state, book);',
+    replace: '    const existing = null;',
+    suite: 'test-goodreads.mjs',
+  },
+  {
+    name: 'Goodreads import overwrites reading progress recorded here',
+    file: 'js/goodreads-ingest.js',
+    find: "        if (!item.totalPages && book.totalPages) patch.totalPages = book.totalPages;",
+    replace: '        patch.currentPage = book.currentPage; patch.progress = book.progress;',
+    suite: 'test-goodreads.mjs',
+  },
+  {
+    name: 'the shelf proxy trusts the caller-supplied user id',
+    file: 'worker/src/worker.js',
+    find: '  if (!/^\\d{1,12}$/.test(userId)) {',
+    replace: '  if (false) {',
+    suite: 'test-worker.mjs',
+  },
+  {
     name: 'project export stops de-duplicating linked copies',
     file: 'js/actions.js',
     find: 'if (seen.has(item.id)) continue;   // a linked copy in two groups counts once',
@@ -155,7 +194,10 @@ for (const m of MUTATIONS) {
   let failed = false;
   let detail = '';
   try {
-    execFileSync(process.execPath, [join(root, 'scripts', m.suite)], { stdio: 'pipe' });
+    execFileSync(process.execPath, [join(root, 'scripts', m.suite)], {
+      stdio: 'pipe',
+      env: { ...process.env, ...(m.env || {}) },
+    });
   } catch (err) {
     failed = true;
     const out = `${err.stdout || ''}${err.stderr || ''}`;

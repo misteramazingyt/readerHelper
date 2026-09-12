@@ -70,6 +70,7 @@ function seedFirstRun() {
 function wireChrome() {
   byId('add-project-btn')?.addEventListener('click', () => render.addProjectInteractive());
   byId('zotero-import-btn')?.addEventListener('click', () => sync.promptZoteroImport());
+  byId('goodreads-import-btn')?.addEventListener('click', () => actions.promptGoodreadsImport());
   byId('sync-btn')?.addEventListener('click', async () => {
     await syncBoardNow();
     await sync.syncAll();
