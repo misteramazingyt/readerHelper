@@ -160,11 +160,28 @@ await check('markup in a review or description is flattened, not shown raw', () 
   eq(first.abstract, 'An archaeology of the human sciences & more.', 'entities decoded');
 });
 
-await check('a read date marks the book finished; its absence does not', () => {
-  const { books } = parseShelfRss(RSS);
+await check('everything on the read shelf counts as finished, date or not', () => {
+  // Found on a real library: 95 of 100 books on the "read" shelf had no
+  // user_read_at. Keying "finished" off the date imported 95 books the user
+  // had read as unread. The shelf is the signal.
+  const { books } = parseShelfRss(RSS, { shelf: 'read' });
   eq(books[0].progress, 1, 'has a read date');
-  eq(books[0].currentPage, 387, 'and a page count');
-  eq(books[1].progress, 0, 'no read date');
+  eq(books[0].currentPage, 387, 'and lands on the last page');
+  eq(books[1].progress, 1, 'no read date, but it is on the read shelf');
+  eq(books[1].currentPage, 120, 'also finished');
+});
+
+await check('the shelf is inferred from the feed title when not passed', () => {
+  // The fixture's title is "Shae's bookshelf: read".
+  eq(parseShelfRss(RSS).books[1].progress, 1, 'inferred as read');
+  eq(parseShelfRss(RSS).books[0].goodreadsShelf, 'read', 'and stamped on the book');
+});
+
+await check('an unread shelf leaves progress alone, unless a date says otherwise', () => {
+  const { books } = parseShelfRss(RSS, { shelf: 'to-read' });
+  eq(books[1].progress, 0, 'no date, not the read shelf');
+  eq(books[0].progress, 1, 'a real read date still counts');
+  eq(books[0].goodreadsShelf, 'to-read', 'shelf recorded as given');
 });
 
 await check('an empty feed parses to nothing rather than throwing', () => {

@@ -168,6 +168,13 @@ const MUTATIONS = [
     suite: 'test-worker.mjs',
   },
   {
+    name: 'the read shelf stops counting as finished without a date',
+    file: 'js/goodreads.js',
+    find: '    const read = shelfSaysRead || Boolean(readAt);',
+    replace: '    const read = Boolean(readAt);',
+    suite: 'test-goodreads.mjs',
+  },
+  {
     name: 'the uploader treats an unrecognised page as success',
     file: 'tools/goodreads_upload.mjs',
     find: "  return { ok: null, reason: 'unclear' };",

@@ -155,7 +155,15 @@ Goodreads **retired its public API** — no new developer keys since December
 2020, and it was deprecated rather than replaced. Nobody can build a read/write
 integration like the Zotero one. What is left is still useful:
 
-**In — a shelf, live.** *G* in the sidebar, or `/goodreads`. Reads your shelf
+**In — a shelf, live.** *G* in the sidebar, or `/goodreads`. Paste your user ID
+into Settings once; it travels to your other computers with the rest of the
+board.
+
+A note from testing against a real library: most people never set a read date,
+so `user_read_at` is empty on the great majority of books — 95 of 100 on one
+real `read` shelf. "Finished" is therefore taken from **the shelf**, not the
+date, or almost everything you have read would import as unread.
+ Reads your shelf
 RSS feeds, which still work and carry title, author, ISBN, page count, year,
 your rating, read date, review and shelves. Needs your numeric user ID (the
 digits in `goodreads.com/user/show/12345678-name`) and a **public** profile.
@@ -650,7 +658,7 @@ node scripts/test-worker.mjs   27 tests   — auth worker: allowlist, CORS, secr
 node scripts/test-citation.mjs 27 tests   — identifier detection and every export format
 node scripts/test-push.mjs     25 tests   — pushing to Zotero, against a fake Zotero API
 node scripts/test-sync.mjs     24 tests   — the merge, and the pull-merge-push loop
-node scripts/test-goodreads.mjs 39 tests  — their CSV, their RSS, the CSV they import, the bot
+node scripts/test-goodreads.mjs 41 tests  — their CSV, their RSS, the CSV they import, the bot
 python scripts/test_protocol.py 10 tests  — what the readerhelper:// handler refuses
 node scripts/test-dom.mjs      41 tests   — boots the real app in jsdom and drives it
 node scripts/test-dnd.mjs      13 tests   — synthesises pointer drags over a fake layout

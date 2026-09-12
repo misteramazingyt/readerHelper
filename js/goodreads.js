@@ -176,17 +176,27 @@ function yearOf(value) {
   return m ? Number(m[1]) : null;
 }
 
-/** Parse a Goodreads shelf RSS feed into board fields. */
-export function parseShelfRss(xml) {
+/**
+ * Parse a Goodreads shelf RSS feed into board fields.
+ *
+ * `shelf` matters more than it looks. Most people never set a read date, so
+ * `user_read_at` is empty on the great majority of books — on a real library,
+ * 95 of 100 on the "read" shelf. Treating the date as the signal for "finished"
+ * therefore imports almost everything you have read as unread. The shelf the
+ * feed came from is the reliable signal; the date is a bonus.
+ */
+export function parseShelfRss(xml, { shelf = null } = {}) {
   const text = String(xml || '');
   const shelfTitle = stripTags(tag(text, 'title'));
+  const feedShelf = shelf || shelfNameFromFeedTitle(shelfTitle);
+  const shelfSaysRead = String(feedShelf || '').toLowerCase() === 'read';
   const items = text.match(/<item>[\s\S]*?<\/item>/g) || [];
 
   const books = items.map((item) => {
     const pages = num(tag(item, 'num_pages'));
     const shelves = splitShelves(tag(item, 'user_shelves'));
     const readAt = tag(item, 'user_read_at');
-    const read = Boolean(readAt);
+    const read = shelfSaysRead || Boolean(readAt);
 
     return {
       title: stripTags(tag(item, 'title')) || 'Untitled',
@@ -198,6 +208,7 @@ export function parseShelfRss(xml) {
       notes: stripTags(tag(item, 'user_review')),
       abstract: stripTags(tag(item, 'book_description')).slice(0, 2000) || null,
       goodreadsId: tag(item, 'book_id') || null,
+      goodreadsShelf: feedShelf || null,
       goodreadsRating: num(tag(item, 'user_rating')),
       goodreadsShelves: shelves,
       dateRead: readAt || null,
@@ -320,7 +331,7 @@ export async function fetchShelf(workerUrl, userId, shelf, { onProgress, maxPage
     if (!res.ok) throw new Error(data.message || `The proxy returned ${res.status}.`);
     if (data.warning) warning = data.warning;
 
-    const parsed = parseShelfRss(data.xml || '');
+    const parsed = parseShelfRss(data.xml || '', { shelf });
     if (!shelfTitle) shelfTitle = parsed.shelfTitle;
     books.push(...parsed.books);
     if (parsed.books.length < 100) break;

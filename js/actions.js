@@ -1240,10 +1240,9 @@ export async function promptGoodreadsImport() {
           toast(res.warning, { type: 'error', timeout: 7000 });
           return null;
         }
-        // The feed knows its own shelf; the CSV carries it per row.
-        for (const b of res.books) {
-          books.push({ ...b, goodreadsShelf: shelf, goodreadsShelves: b.goodreadsShelves });
-        }
+        // parseShelfRss already stamps the shelf on each book, and uses it to
+        // decide what counts as finished.
+        books.push(...res.books);
       }
       source = `${shelves.length} shelf/shelves`;
       store.saveSettings({ goodreadsUserId: values.userId, goodreadsShelves: values.shelves });
