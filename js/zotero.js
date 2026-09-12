@@ -4,6 +4,8 @@
 // GitHub Pages origin with no proxy. The key lives in localStorage and is sent
 // as a header, never as a query string (query keys leak into referrer logs).
 
+import { fetchWithTimeout, TIMEOUTS } from './net.js';
+
 const API = 'https://api.zotero.org';
 const PAGE_SIZE = 100;
 
@@ -20,10 +22,11 @@ function libraryPath(cfg) {
   return `users/${cfg.zoteroUserId}`;
 }
 
-async function request(cfg, path, { method = 'GET', body, headers = {}, raw = false } = {}) {
+async function request(cfg, path, { method = 'GET', body, headers = {}, raw = false, timeoutMs = TIMEOUTS.long } = {}) {
   if (!cfg?.zoteroApiKey) throw new ZoteroError('No Zotero API key configured.', 0);
-  const res = await fetch(`${API}/${path}`, {
+  const res = await fetchWithTimeout(`${API}/${path}`, {
     method,
+    timeoutMs,
     headers: {
       'Zotero-API-Version': '3',
       'Zotero-API-Key': cfg.zoteroApiKey,

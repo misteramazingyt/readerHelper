@@ -137,13 +137,13 @@ export async function importCollection(collectionKey) {
     busy.update('Updating the board…');
     const report = store.commit('import zotero collection', (s) => applyPlan(s, plan));
     store.setActiveProject(report.projectId);
-    busy.done();
     toast(summarise(plan.root.name, report), { type: 'success', timeout: 6000 });
     return report;
   } catch (err) {
-    busy.done();
     errorToast(err, 'Zotero import');
     return null;
+  } finally {
+    busy.done();
   }
 }
 

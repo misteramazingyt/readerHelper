@@ -264,7 +264,14 @@ async function searchAndAdd({ groupId, source, closeForm, seed = '' }) {
     if (isZotero) {
       // The index holds only what search needs; get the real records now.
       const rows = await zotero.fetchItemsByKeys(store.getSettings(), picked.map((p) => p.key));
-      records = await Promise.all(rows.map((r) => zotero.toItemFields(store.getSettings(), r, { withAttachments: false })));
+      // Attachments matter: without them a book added this way has no
+      // pdfAttachmentKey and its "Local PDF" button is dead on arrival. One
+      // request per picked book is fine — it is a handful, not the library.
+      records = [];
+      for (const [i, r] of rows.entries()) {
+        busy.update(`Reading ${i + 1}/${rows.length} from Zotero…`);
+        records.push(await zotero.toItemFields(store.getSettings(), r));
+      }
     } else {
       records = [];
       for (const [i, row] of picked.entries()) {
@@ -282,17 +289,21 @@ async function searchAndAdd({ groupId, source, closeForm, seed = '' }) {
       ...fields,
       itemType: fields.itemType || 'book',
     })));
-    busy.done();
+    const withPdf = created.filter((c) => c?.item?.pdfAttachmentKey || c?.item?.localPdfPath).length;
     toast(
-      `Added ${created.length} book${created.length === 1 ? '' : 's'} from ${source}.`,
+      `Added ${created.length} book${created.length === 1 ? '' : 's'} from ${source}`
+      + (isZotero ? `, ${withPdf} with a PDF.` : '.'),
       { type: 'success' },
     );
     closeForm?.();
     return created;
   } catch (err) {
-    busy.done();
     errorToast(err, source);
     return null;
+  } finally {
+    // In a finally, not the happy path: a stalled request used to leave this
+    // spinner on screen until the page was reloaded.
+    busy.done();
   }
 }
 

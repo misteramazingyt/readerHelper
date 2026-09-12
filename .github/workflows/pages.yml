@@ -32,6 +32,8 @@ jobs:
         run: node scripts/check.mjs
       - name: No leftover mutation defects
         run: node scripts/mutate-verify.mjs
+      - name: Network deadline tests
+        run: node scripts/test-net.mjs
       - name: Board model tests
         run: node scripts/test-store.mjs
       - name: Zotero ingest tests

@@ -420,7 +420,19 @@ executables; UNC and relative paths are refused; and `ALLOWED_ROOTS` in the
 script can restrict it to named folders. Remove it with `-Uninstall`.
 
 Local PDF paths come from Zotero's attachment records, resolved against the
-**Zotero data directory** in Settings.
+**Zotero data directory** in Settings. Until that is set, `localPdfPath` is
+empty and only the Zotero route works — which is why it is the default.
+
+**Settings → Check PDF setup** reports the actual state: how many books are
+linked to Zotero, how many have a PDF attachment, how many have a local file
+path, which route is selected, and what is missing. It also offers to try
+opening one, so the whole chain can be tested in a click.
+
+In short, for either button: **Zotero must be installed** (that is what
+registers `zotero://`), and it will start if it is not running. The first click
+per browser session asks permission — tick *always allow*. For the system PDF
+app instead of Zotero's reader, add the one-time handler and the data
+directory.
 
 ---
 

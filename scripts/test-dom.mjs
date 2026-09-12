@@ -426,6 +426,20 @@ await check('settings opens and shows the key fields', async () => {
   await tick(10);
 });
 
+await check('the PDF setup check reports what is and is not in place', async () => {
+  const settingsMod = await import(pathToFileURL(join(root, 'js', 'settings.js')).href);
+  settingsMod.openPdfDiagnostics();
+  await tick(40);
+  const text = $('.modal').textContent;
+  for (const expected of ['Books on the board', 'Linked to a Zotero item', 'With a PDF attachment', 'Local PDF button opens']) {
+    ok(text.includes(expected), `reports "${expected}"`);
+  }
+  ok(text.includes('zotero://') || text.includes('Zotero must be installed'),
+    'explains that Zotero has to be installed');
+  click([...$('.modal').querySelectorAll('.btn')].find((b) => b.textContent === 'Close'));
+  await tick(20);
+});
+
 await check('the archive view opens', async () => {
   click($('#archive-btn'));
   await tick(30);
@@ -813,6 +827,35 @@ await check('the panel opens pre-filtered when seeded', async () => {
   eq(rowTitles(), ['A Theory of Justice'], 'already narrowed');
   click($$('.btn').find((b) => b.textContent === 'Cancel'));
   await pending;
+});
+
+await check('the busy overlay can always be dismissed', async () => {
+  const { showBusy } = await import(pathToFileURL(join(root, 'js', 'ui.js')).href);
+  const busy = showBusy('Doing a thing…');
+  const overlay = window.document.getElementById('busy-overlay');
+  ok(overlay && !overlay.hidden, 'shown');
+  eq(overlay.querySelector('.busy-text').textContent, 'Doing a thing…', 'says what');
+
+  const escape = overlay.querySelector('.busy-escape');
+  ok(escape, 'an escape hatch exists');
+  ok(escape.hidden, 'but stays out of the way while the job is young');
+
+  busy.update('Still doing it…');
+  eq(overlay.querySelector('.busy-text').textContent, 'Still doing it…', 'progress shows');
+
+  busy.done();
+  ok(overlay.hidden, 'and it clears');
+});
+
+await check('clicking the escape hatch clears a stuck overlay', async () => {
+  const { showBusy } = await import(pathToFileURL(join(root, 'js', 'ui.js')).href);
+  showBusy('Stuck forever…');
+  const overlay = window.document.getElementById('busy-overlay');
+  const escape = overlay.querySelector('.busy-escape');
+  // Reveal it directly rather than waiting out the real delay.
+  escape.hidden = false;
+  click(escape);
+  ok(overlay.hidden, 'the user is never trapped behind a spinner');
 });
 
 await check('state persisted to localStorage', () => {

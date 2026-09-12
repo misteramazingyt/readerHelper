@@ -15,6 +15,8 @@
 //   Google Books ISBNs, volume ids, title search
 //   archive.org  scanned items by identifier
 
+import { fetchWithTimeout, TIMEOUTS } from './net.js';
+
 const CROSSREF = 'https://api.crossref.org/works';
 const DATACITE = 'https://api.datacite.org/dois';
 const OPENALEX = 'https://api.openalex.org/works';
@@ -143,7 +145,7 @@ export function normaliseIsbn(s) {
 // ------------------------------------------------------------------ helpers
 
 async function getJson(url, { signal, headers } = {}) {
-  const res = await fetch(url, { signal, headers });
+  const res = await fetchWithTimeout(url, { signal, headers, timeoutMs: TIMEOUTS.quick });
   if (!res.ok) {
     const host = new URL(url).hostname;
     // These services are keyless and shared, so a 429 is routine rather than a

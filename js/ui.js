@@ -656,19 +656,58 @@ export function el(tag, className, text) {
   return node;
 }
 
+/** After this long with no sign of life, offer a way out. */
+const BUSY_ESCAPE_MS = 20_000;
+
+/**
+ * A blocking progress overlay.
+ *
+ * It grows a dismiss button if it has been up a long time without progress.
+ * Callers should still clear it in a `finally` — but a spinner that can trap
+ * the whole UI until the page is reloaded is a bad enough failure that it
+ * deserves a floor under it as well as a ceiling.
+ */
 export function showBusy(message) {
   let overlay = document.getElementById('busy-overlay');
   if (!overlay) {
     overlay = document.createElement('div');
     overlay.id = 'busy-overlay';
     overlay.className = 'busy-overlay';
-    overlay.innerHTML = '<div class="busy-box"><div class="spinner"></div><div class="busy-text"></div></div>';
+    overlay.innerHTML = '<div class="busy-box">'
+      + '<div class="spinner"></div>'
+      + '<div class="busy-text"></div>'
+      + '<button type="button" class="busy-escape" hidden>Dismiss</button>'
+      + '</div>';
     document.body.appendChild(overlay);
   }
-  overlay.querySelector('.busy-text').textContent = message;
+
+  const text = overlay.querySelector('.busy-text');
+  const escape = overlay.querySelector('.busy-escape');
+  let timer = null;
+
+  const hide = () => {
+    clearTimeout(timer);
+    overlay.hidden = true;
+    escape.hidden = true;
+  };
+
+  const armEscape = () => {
+    clearTimeout(timer);
+    escape.hidden = true;
+    timer = setTimeout(() => {
+      escape.hidden = false;
+      text.textContent = `${text.textContent} — still waiting.`;
+    }, BUSY_ESCAPE_MS);
+  };
+
+  escape.onclick = hide;
+  text.textContent = message;
   overlay.hidden = false;
+  armEscape();
+
   return {
-    update: (m) => { overlay.querySelector('.busy-text').textContent = m; },
-    done: () => { overlay.hidden = true; },
+    // Progress resets the clock: a long job that is still reporting is fine.
+    update: (m) => { text.textContent = m; armEscape(); },
+    done: hide,
   };
 }

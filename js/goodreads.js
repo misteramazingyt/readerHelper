@@ -16,6 +16,8 @@
 //
 // Everything here is pure string work, so it is all testable offline.
 
+import { fetchWithTimeout, TIMEOUTS } from './net.js';
+
 export const SHELF_GROUPS = {
   'to-read': 'To read',
   'currently-reading': 'Reading now',
@@ -335,11 +337,12 @@ export function parseSearchResults(html, { limit = 20 } = {}) {
 export async function searchBooks(workerUrl, query, { signal, limit = 20 } = {}) {
   const base = String(workerUrl || '').replace(/\/$/, '');
   if (!base) throw new Error('Searching Goodreads needs the worker — none is configured.');
-  const res = await fetch(`${base}/goodreads-search`, {
+  const res = await fetchWithTimeout(`${base}/goodreads-search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ q: query }),
     signal,
+    timeoutMs: TIMEOUTS.normal,
   });
   const data = await res.json().catch(() => ({}));
   if (res.status === 404 && data.error !== 'not_found') {
@@ -364,11 +367,12 @@ export function titleFromBookUrl(url) {
 export async function fetchBook(workerUrl, goodreadsId, { signal } = {}) {
   const base = String(workerUrl || '').replace(/\/$/, '');
   if (!base) throw new Error('No worker URL configured.');
-  const res = await fetch(`${base}/goodreads-book`, {
+  const res = await fetchWithTimeout(`${base}/goodreads-book`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ bookId: goodreadsId }),
     signal,
+    timeoutMs: TIMEOUTS.normal,
   });
   const data = await res.json().catch(() => ({}));
   if (res.status === 404 && data.error !== 'not_found') {
@@ -469,11 +473,12 @@ export async function fetchShelf(workerUrl, userId, shelf, { onProgress, maxPage
 
   for (let page = 1; page <= maxPages; page += 1) {
     onProgress?.(`Reading “${shelf}” from Goodreads — ${books.length} so far…`);
-    const res = await fetch(`${base}/goodreads`, {
+    const res = await fetchWithTimeout(`${base}/goodreads`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, shelf, page }),
       signal,
+      timeoutMs: TIMEOUTS.long,
     });
     const data = await res.json().catch(() => ({}));
     if (res.status === 404 && data.error !== 'not_found') {

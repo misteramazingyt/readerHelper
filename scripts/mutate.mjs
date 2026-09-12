@@ -263,6 +263,20 @@ const MUTATIONS = [
     suite: 'test-dom.mjs',
   },
   {
+    name: 'requests lose their deadline and can hang forever',
+    file: 'js/net.js',
+    find: '    return await fetch(url, { ...init, signal: deadline(timeoutMs, signal) });',
+    replace: '    return await fetch(url, { ...init, signal });',
+    suite: 'test-net.mjs',
+  },
+  {
+    name: 'a timeout is reported as a caller cancellation',
+    file: 'js/net.js',
+    find: "    if (err.name === 'TimeoutError' || (err.name === 'AbortError' && !signal?.aborted)) {",
+    replace: '    if (false) {',
+    suite: 'test-net.mjs',
+  },
+  {
     name: 'project export stops de-duplicating linked copies',
     file: 'js/actions.js',
     find: 'if (seen.has(item.id)) continue;   // a linked copy in two groups counts once',

@@ -5,6 +5,8 @@
 // fine-grained PAT with Gist read/write only, kept in localStorage and never
 // committed — the Action uses a repo Secret instead.
 
+import { fetchWithTimeout, TIMEOUTS } from './net.js';
+
 const GH = 'https://api.github.com';
 export const STATE_FILENAME = 'readerhelper-state.json';
 
@@ -18,8 +20,9 @@ export class GistError extends Error {
 
 async function gh(cfg, path, { method = 'GET', body } = {}) {
   if (!cfg?.githubToken) throw new GistError('No GitHub token configured.', 0);
-  const res = await fetch(`${GH}${path}`, {
+  const res = await fetchWithTimeout(`${GH}${path}`, {
     method,
+    timeoutMs: TIMEOUTS.normal,
     headers: {
       Accept: 'application/vnd.github+json',
       Authorization: `Bearer ${cfg.githubToken}`,

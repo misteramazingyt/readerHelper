@@ -14,6 +14,7 @@ import { itemProgress } from './model.js';
 import { pct } from './nlp.js';
 import * as auth from './auth.js';
 import * as zoteroPush from './zotero-push.js';
+import * as opener from './open.js';
 
 export function openSettings() {
   const cfg = store.getSettings();
@@ -155,6 +156,8 @@ export function openSettings() {
             { value: 'light', label: 'Light' },
             { value: 'dark', label: 'Dark' },
           ]),
+        ], [
+          button('Check PDF setup', () => openPdfDiagnostics()),
         ]),
       );
 
@@ -379,6 +382,93 @@ function rawButton(label, handler, danger = false) {
   b.type = 'button';
   b.addEventListener('click', handler);
   return b;
+}
+
+// ------------------------------------------------------------- PDF setup
+
+/**
+ * Answer "why will this book not open?" with the actual state of things, rather
+ * than making the user infer it from a greyed-out button.
+ */
+export function openPdfDiagnostics() {
+  const cfg = store.getSettings();
+  const items = allItems();
+  const withZoteroLink = items.filter((i) => i.citekey || i.zoteroKey).length;
+  const withAttachment = items.filter((i) => i.pdfAttachmentKey).length;
+  const withLocalPath = items.filter((i) => i.localPdfPath).length;
+  const handler = cfg.localPdfHandler === 'protocol' ? 'System PDF app' : "Zotero's reader";
+
+  const sample = items.find((i) => i.pdfAttachmentKey) || items.find((i) => i.localPdfPath);
+  const zoteroSample = items.find((i) => i.citekey || i.zoteroKey);
+
+  return openModal({
+    title: 'PDF setup',
+    width: 'wide',
+    render: (body, close) => {
+      const rows = [
+        ['Books on the board', String(items.length)],
+        ['Linked to a Zotero item', `${withZoteroLink} — these can use the Zotero button`],
+        ['With a PDF attachment', `${withAttachment} — these can open in Zotero's reader`],
+        ['With a local file path', `${withLocalPath} — these can open in your system PDF app`],
+        ['Local PDF button opens', handler],
+        ['Zotero data directory', cfg.zoteroDataDir || 'not set'],
+      ];
+      const grid = el('div', 'detail__grid');
+      for (const [k, v] of rows) {
+        const row = el('div', 'detail__grid-row');
+        row.append(el('span', 'detail__grid-key', k), el('span', 'detail__grid-value', v));
+        grid.appendChild(row);
+      }
+      body.appendChild(grid);
+
+      const notes = [];
+      if (!withZoteroLink) {
+        notes.push('No book here is linked to Zotero yet. Import a collection with Z, or add books with Search Zotero.');
+      }
+      if (withZoteroLink && !withAttachment) {
+        notes.push('Your books are linked to Zotero but none has a PDF attached in Zotero itself. The Zotero button will still find the item.');
+      }
+      if (cfg.localPdfHandler === 'protocol' && !cfg.zoteroDataDir) {
+        notes.push('The system PDF app is selected, but without a Zotero data directory no file path can be built. Set it above (usually C:\Users\<you>\Zotero), then re-sync.');
+      }
+      if (cfg.localPdfHandler === 'protocol') {
+        notes.push('That route also needs the readerhelper:// handler installed once — tools/install-protocol.ps1.');
+      }
+      notes.push('Both buttons hand off to Zotero through a zotero:// link, so Zotero must be installed; it will start if it is not already running. The first click per browser session asks permission — tick "always allow".');
+
+      for (const n of notes) body.appendChild(el('p', 'push__note', n));
+
+      const actions = el('div', 'form__actions');
+      actions.appendChild(el('div', 'form__spacer'));
+
+      if (zoteroSample) {
+        const tryZotero = el('button', 'btn btn--ghost', 'Try the Zotero button');
+        tryZotero.type = 'button';
+        tryZotero.title = zoteroSample.title;
+        tryZotero.addEventListener('click', () => {
+          toast(`Asking Zotero to show “${zoteroSample.title}”…`);
+          opener.openInZotero(zoteroSample);
+        });
+        actions.appendChild(tryZotero);
+      }
+      if (sample) {
+        const tryPdf = el('button', 'btn btn--primary', 'Try opening a PDF');
+        tryPdf.type = 'button';
+        tryPdf.title = sample.title;
+        tryPdf.addEventListener('click', () => {
+          const res = opener.openLocalPdf(sample, store.getSettings());
+          toast(res.message, { type: res.ok ? 'info' : 'error' });
+        });
+        actions.appendChild(tryPdf);
+      }
+
+      const done = el('button', 'btn btn--ghost', 'Close');
+      done.type = 'button';
+      done.addEventListener('click', () => close(null));
+      actions.appendChild(done);
+      body.appendChild(actions);
+    },
+  });
 }
 
 // ------------------------------------------------------------------- theme
