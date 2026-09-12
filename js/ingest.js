@@ -31,37 +31,48 @@ export async function buildPlan(cfg, zot, collectionKey, { onProgress } = {}) {
   const groups = [];
 
   report(`Reading “${root.name}”…`);
-  const topRows = await zot.fetchCollectionItems(cfg, collectionKey);
-  if (topRows.length) {
+  const rootTree = await zot.fetchCollectionTree(cfg, collectionKey,
+    (n, total) => report(`${root.name}: ${n}/${total || '?'} records…`));
+  if (rootTree.tops.length) {
     groups.push({
       name: subs.length ? UNSORTED : root.name,
       // Only claim the collection key when this group really is the collection.
       collectionKey: subs.length ? null : collectionKey,
-      items: await toFields(cfg, zot, topRows, report, root.name),
+      items: await toFields(cfg, zot, rootTree, report, root.name),
     });
   }
 
   for (const sub of subs) {
     report(`Reading “${sub.name}”…`);
-    const rows = await zot.fetchCollectionItems(cfg, sub.key);
+    const tree = await zot.fetchCollectionTree(cfg, sub.key,
+      (n, total) => report(`${sub.name}: ${n}/${total || '?'} records…`));
     groups.push({
       name: sub.name,
       collectionKey: sub.key,
-      items: await toFields(cfg, zot, rows, report, sub.name),
+      items: await toFields(cfg, zot, tree, report, sub.name),
     });
   }
 
   return { root, groups };
 }
 
-async function toFields(cfg, zot, rows, report, label) {
+/**
+ * Map a fetched collection onto board fields.
+ *
+ * `tree` carries the attachments alongside their parents, so this loop makes no
+ * network calls at all — it used to make one per book, which is what made a
+ * large import look like it had hung.
+ */
+async function toFields(cfg, zot, tree, report, label) {
+  const rows = tree.tops || tree;
+  const children = tree.childrenByParent || new Map();
   const out = [];
   let i = 0;
   for (const row of rows) {
     i += 1;
-    if (i % 5 === 0) report(`${label}: ${i}/${rows.length}…`);
+    if (i % 25 === 0) report(`${label}: ${i}/${rows.length}…`);
     try {
-      out.push(await zot.toItemFields(cfg, row));
+      out.push(await zot.toItemFields(cfg, row, { attachments: children.get(row.key) || [] }));
     } catch (err) {
       // A single unreadable item should not abort a 300-item collection.
       console.warn(`skipped ${row.key}`, err?.message || err);

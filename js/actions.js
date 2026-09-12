@@ -112,6 +112,39 @@ export async function promptAddBook(groupId) {
   const values = await openForm({
     title: 'Add a book',
     submitLabel: 'Add',
+    toolbar: [
+      {
+        label: 'Search Goodreads',
+        accent: 'goodreads',
+        title: 'Search Goodreads by title, author or ISBN',
+        onClick: (api) => searchAndFill({
+          api,
+          source: 'Goodreads',
+          seed: api.get('identifier') || api.get('title'),
+          emptyHint: 'Nothing on Goodreads matched. Their search ranks study guides highly — try adding the author.',
+          runSearch: (q) => goodreads.searchBooks(AUTH.workerUrl, q),
+        }).then((chosen) => { if (chosen) resolved = chosen; }),
+      },
+      {
+        label: 'Search Zotero',
+        accent: 'zotero',
+        title: 'Search the books already in your Zotero library',
+        onClick: (api) => searchAndFill({
+          api,
+          source: 'Zotero',
+          seed: api.get('identifier') || api.get('title'),
+          emptyHint: 'Nothing in your Zotero library matched.',
+          runSearch: async (q) => {
+            const cfg = store.getSettings();
+            if (!cfg.zoteroApiKey || !cfg.zoteroUserId) {
+              throw new Error('Add your Zotero API key and user ID in Settings first.');
+            }
+            const rows = await zotero.searchLibrary(cfg, q);
+            return Promise.all(rows.map((r) => zotero.toItemFields(cfg, r, { withAttachments: false })));
+          },
+        }).then((chosen) => { if (chosen) resolved = chosen; }),
+      },
+    ],
     intro: 'Paste a DOI, ISBN, arXiv id, or a Goodreads / Google Books / archive.org / Open Library link — the rest fills itself in. Or type a title and press Enter to search. Everything can also be entered by hand.',
     beforeSubmit: async (v, api) => {
       // The old behaviour here was to refuse with "Title is required" while an
@@ -169,9 +202,73 @@ export async function promptAddBook(groupId) {
     issue: resolved?.issue || null,
     abstract: resolved?.abstract || null,
     goodreadsId: resolved?.goodreadsId || (detected.kind === 'goodreads' ? detected.value : null),
+    goodreadsRating: resolved?.goodreadsRating ?? null,
+    // A Zotero search result arrives already linked to the library.
+    zoteroKey: resolved?.zoteroKey || null,
+    zoteroLibrary: resolved?.zoteroLibrary || null,
+    citekey: resolved?.citekey || null,
+    zoteroVersion: resolved?.zoteroVersion ?? null,
+    pdfAttachmentKey: resolved?.pdfAttachmentKey || null,
+    localPdfPath: resolved?.localPdfPath || null,
   });
   toast(`Added “${truncate(values.title, 44)}”.`, { type: 'success' });
   return created;
+}
+
+/**
+ * Search one named source and let the user pick. Used by the Goodreads and
+ * Zotero buttons at the top of "Add a book".
+ *
+ * `runSearch` returns candidate records; the picker is the same one the
+ * automatic lookup uses, so a result from any source fills the form the same
+ * way. Only blank fields are written, as everywhere else.
+ */
+async function searchAndFill({ api, source, seed, runSearch, emptyHint }) {
+  const query = await openForm({
+    title: `Search ${source}`,
+    submitLabel: 'Search',
+    fields: [{
+      name: 'q',
+      label: `Title, author, or ISBN`,
+      value: seed || '',
+      required: true,
+      autofocus: true,
+    }],
+  });
+  if (!query) return null;
+
+  api.setStatus(`Searching ${source}…`, 'busy');
+  try {
+    const results = await runSearch(query.q);
+    if (!results.length) {
+      api.setStatus(emptyHint || `Nothing found on ${source} for “${truncate(query.q, 40)}”.`, 'warn');
+      return null;
+    }
+    api.setStatus(`${results.length} result(s) from ${source} — choose one.`, 'info');
+    const chosen = await pickCandidate(results);
+    if (!chosen) {
+      api.setStatus('Nothing chosen.', 'info');
+      return null;
+    }
+
+    const filled = api.fillEmpty({
+      title: [chosen.title, chosen.subtitle].filter(Boolean).join(': '),
+      authors: (chosen.authors || []).join(', '),
+      year: chosen.year,
+      totalPages: chosen.totalPages,
+      url: chosen.url,
+    });
+    api.setStatus(
+      filled.length
+        ? `From ${source}: ${truncate(chosen.title, 48)}`
+        : `From ${source}, but every field is already filled in.`,
+      'ok',
+    );
+    return chosen;
+  } catch (err) {
+    api.setStatus(err.message, 'error');
+    return null;
+  }
 }
 
 /** Let the user choose when a title search returns several plausible works. */
@@ -188,10 +285,12 @@ function pickCandidate(candidates) {
         main.append(
           el('span', 'candidate__title', [c.title, c.subtitle].filter(Boolean).join(': ')),
           el('span', 'candidate__meta', [
-            c.authors.slice(0, 3).join(', '),
+            (c.authors || []).slice(0, 3).join(', '),
             c.year,
             c.container || c.publisher,
             c.totalPages ? `${c.totalPages} pp` : null,
+            c.isbn ? `ISBN ${c.isbn}` : null,
+            c.averageRating ? `★ ${c.averageRating}${c.ratingsCount ? ` (${c.ratingsCount.toLocaleString()})` : ''}` : null,
           ].filter(Boolean).join(' · ')),
         );
         btn.append(main, el('span', 'candidate__source', c.source));

@@ -10,7 +10,7 @@ import {
   parseCsv, toCsv, csvToObjects, cleanIsbn, fromCsvRow, parseLibraryCsv,
   parseShelfRss, shelfNameFromFeedTitle, bookUrl, shelfRssUrl, toImportCsv,
   toShelfName, toGoodreadsDate, splitShelves, IMPORT_COLUMNS,
-  parseBookPage, titleFromBookUrl,
+  parseBookPage, titleFromBookUrl, parseSearchResults,
 } from '../js/goodreads.js';
 import {
   planGroups, prettyShelf, orderGroupNames, findExisting, applyGoodreads,
@@ -446,6 +446,54 @@ await check('the title in the URL slug is recoverable', () => {
   eq(titleFromBookUrl('https://www.goodreads.com/book/show/1885-pride-and-prejudice'),
     'pride and prejudice', 'hyphen slug');
   eq(titleFromBookUrl('https://www.goodreads.com/book/show/73142'), null, 'no slug to read');
+});
+
+// ============================================================ search results
+
+// Trimmed from a real Goodreads search page for "the order of things
+// foucault". The ordering is theirs: study guides and compilations above the
+// actual book, which is why the user picks rather than the code guessing.
+const SEARCH_PAGE = `<table>
+<tr itemscope itemtype="http://schema.org/Book">
+  <td><a class="bookTitle" href="/book/show/12870366.Articles_on_Michel_Foucault"><span itemprop="name">Articles on Michel Foucault, Including: The Order of Things</span></a>
+  <span class="authorName__container"><a class="authorName" href="/author/show/1"><span itemprop="name">Hephaestus Books</span></a></span>
+  <span class="minirating"><span class="stars"></span> 3.50 avg rating &mdash; 2 ratings</span></td>
+</tr>
+<tr itemscope itemtype="http://schema.org/Book">
+  <td><a class="bookTitle" href="/book/show/119561.The_Order_of_Things"><span itemprop="name">The Order of Things: An Archaeology of the Human Sciences</span></a>
+  <span class="authorName__container"><a class="authorName" href="/author/show/1244.Michel_Foucault"><span itemprop="name">Michel Foucault</span></a></span>
+  <span class="minirating"><span class="stars"></span> 4.13 avg rating &mdash; 12,345 ratings</span></td>
+</tr>
+</table>`;
+
+await check('a search page yields pickable results', () => {
+  const hits = parseSearchResults(SEARCH_PAGE);
+  eq(hits.length, 2, 'both rows');
+  eq(hits[1].title, 'The Order of Things: An Archaeology of the Human Sciences', 'title');
+  eq(hits[1].authors, ['Michel Foucault'], 'author');
+  eq(hits[1].goodreadsId, '119561', 'id from the link');
+  eq(hits[1].url, 'https://www.goodreads.com/book/show/119561', 'canonical link');
+});
+
+await check('the rating is read, commas and all', () => {
+  const hits = parseSearchResults(SEARCH_PAGE);
+  eq(hits[1].averageRating, 4.13, 'average');
+  eq(hits[1].ratingsCount, 12345, 'count with the comma removed');
+  eq(hits[0].ratingsCount, 2, 'small count');
+});
+
+await check('the first hit is not assumed to be the right book', () => {
+  // Goodreads put a compilation above the actual work; returning a list is
+  // the whole point.
+  const hits = parseSearchResults(SEARCH_PAGE);
+  ok(/Articles on/.test(hits[0].title), 'their ranking is preserved, not second-guessed');
+  ok(hits.length > 1, 'and the real book is there to choose');
+});
+
+await check('the limit is honoured and junk yields nothing', () => {
+  eq(parseSearchResults(SEARCH_PAGE, { limit: 1 }).length, 1, 'limited');
+  eq(parseSearchResults('<html>no books here</html>'), [], 'no rows');
+  eq(parseSearchResults(''), [], 'no page');
 });
 
 // ========================================================= the upload bot

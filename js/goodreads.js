@@ -282,6 +282,73 @@ export function parseBookPage(html, { goodreadsId = null } = {}) {
   };
 }
 
+/**
+ * Parse a Goodreads search results page.
+ *
+ * Each hit is a `<tr itemscope itemtype="schema.org/Book">` carrying the book
+ * id, title, author and average rating. Works on the whole page or on just the
+ * rows, so the worker can send back only the part that matters.
+ *
+ * Goodreads ranks study guides and "Articles on…" compilations above the real
+ * book surprisingly often, which is exactly why this returns a list to choose
+ * from rather than picking the first hit.
+ */
+export function parseSearchResults(html, { limit = 20 } = {}) {
+  const text = String(html || '');
+  const rows = text.match(/<tr[^>]+itemtype="[^"]*schema\.org\/Book"[\s\S]*?<\/tr>/gi) || [];
+  const out = [];
+
+  for (const row of rows) {
+    const link = row.match(/<a[^>]+class="bookTitle"[^>]*href="([^"]*)"[\s\S]*?<span[^>]*>([\s\S]*?)<\/span>/i);
+    if (!link) continue;
+    const id = (link[1].match(/\/book\/show\/(\d+)/) || [])[1] || null;
+    const title = stripTags(link[2]);
+    if (!title) continue;
+
+    const author = row.match(/<a[^>]+class="authorName"[^>]*>[\s\S]*?<span[^>]*>([\s\S]*?)<\/span>/i);
+
+    // The rating block nests a <span class="stars"> inside, so a lazy match on
+    // the closing tag stops at the wrong one and captures nothing. Take a
+    // window of text after the marker and read the numbers out of that.
+    const at = row.search(/class="minirating"/i);
+    const ratingText = at >= 0 ? stripTags(row.slice(at, at + 400)) : '';
+    const avg = (ratingText.match(/([\d.]+)\s*avg/i) || [])[1];
+    const count = (ratingText.match(/([\d,]+)\s*ratings?/i) || [])[1];
+
+    out.push({
+      title,
+      authors: author ? [stripTags(author[1])] : [],
+      year: yearOf(row.match(/published\s+(\d{4})/i)?.[1]),
+      goodreadsId: id,
+      url: id ? `https://www.goodreads.com/book/show/${id}` : null,
+      averageRating: avg ? Number(avg) : null,
+      ratingsCount: count ? Number(count.replace(/,/g, '')) : null,
+      itemType: 'book',
+      source: 'Goodreads',
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/** Search Goodreads through the worker, which supplies the CORS headers. */
+export async function searchBooks(workerUrl, query, { signal, limit = 20 } = {}) {
+  const base = String(workerUrl || '').replace(/\/$/, '');
+  if (!base) throw new Error('Searching Goodreads needs the worker — none is configured.');
+  const res = await fetch(`${base}/goodreads-search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: query }),
+    signal,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 404 && data.error !== 'not_found') {
+    throw new Error('The worker has no /goodreads-search route yet — redeploy it (cd worker && npx wrangler deploy).');
+  }
+  if (!res.ok) throw new Error(data.message || `The proxy returned ${res.status}.`);
+  return parseSearchResults(data.html || '', { limit });
+}
+
 /** The title Goodreads put in the URL slug, for use when the page is unreachable. */
 export function titleFromBookUrl(url) {
   const m = String(url || '').match(/\/book\/show\/\d+[.\-]([^/?#]+)/);

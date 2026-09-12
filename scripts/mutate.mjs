@@ -196,6 +196,22 @@ const MUTATIONS = [
     suite: 'test-worker.mjs',
   },
   {
+    name: 'search ratings read with a lazy match that stops at a nested span',
+    file: 'js/goodreads.js',
+    // Reverting to the lazy match is the bug: the nested <span class="stars">
+    // closes first, so the capture is empty and every rating reads as null.
+    find: 'row.slice(at, at + 400)',
+    replace: "(row.match(/<span class=\"minirating\">([\\s\\S]*?)<\\/span>/i) || ['', ''])[1]",
+    suite: 'test-goodreads.mjs',
+  },
+  {
+    name: 'search returns only the first hit instead of a list',
+    file: 'js/goodreads.js',
+    find: '    if (out.length >= limit) break;',
+    replace: '    if (out.length >= 1) break;',
+    suite: 'test-goodreads.mjs',
+  },
+  {
     name: 'the uploader treats an unrecognised page as success',
     file: 'tools/goodreads_upload.mjs',
     find: "  return { ok: null, reason: 'unclear' };",
@@ -208,6 +224,20 @@ const MUTATIONS = [
     find: '    .sort((a, b) => b.t - a.t);',
     replace: '    .sort((a, b) => a.t - b.t);',
     suite: 'test-goodreads.mjs',
+  },
+  {
+    name: 'the import goes back to the network once per book (the N+1)',
+    file: 'js/ingest.js',
+    find: '{ attachments: children.get(row.key) || [] }',
+    replace: '{}',
+    suite: 'test-ingest.mjs',
+  },
+  {
+    name: 'Escape closes every stacked dialog instead of only the top one',
+    file: 'js/ui.js',
+    find: '      if (modalStack[modalStack.length - 1] !== token) return;',
+    replace: '',
+    suite: 'test-dom.mjs',
   },
   {
     name: 'project export stops de-duplicating linked copies',

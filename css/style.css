@@ -884,6 +884,39 @@ kbd {
   cursor: pointer;
 }
 
+/* ------------------------------------------------------------ form toolbar */
+
+.form__toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-bottom: 12px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.source-btn {
+  flex: 1 1 auto;
+  min-height: 38px;
+  padding: 0 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+
+.source-btn:hover { background: var(--surface-3); }
+
+/* Each source keeps its own colour so the two are told apart at a glance. */
+.source-btn--goodreads { border-left: 3px solid #7d6b52; }
+.source-btn--goodreads:hover { border-color: #7d6b52; }
+.source-btn--zotero { border-left: 3px solid #cc2936; }
+.source-btn--zotero:hover { border-color: #cc2936; }
+
 /* ------------------------------------------------- form status + candidates */
 
 .form__status {

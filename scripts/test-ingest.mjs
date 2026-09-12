@@ -44,10 +44,30 @@ function row(key, title, version) {
   return { key, version, data: { key, itemType: 'book', title, creators: [{ creatorType: 'author', firstName: 'A', lastName: 'Writer' }], date: '2001', numPages: '200' } };
 }
 
+// Counts every call, so a test can assert the import does not go back to the
+// network once per book.
+const calls = { tree: 0, children: 0, fields: 0 };
+
 const zotStub = {
   async fetchCollections() { return COLLECTIONS; },
   async fetchCollectionItems(_cfg, key) { return ITEMS[key] || []; },
-  async toItemFields(_cfg, r) {
+  async fetchItemChildren() { calls.children += 1; return []; },
+  async fetchCollectionTree(_cfg, key) {
+    calls.tree += 1;
+    const rows = ITEMS[key] || [];
+    // A PDF attachment hanging off the first item, as a real library would have.
+    const childrenByParent = new Map();
+    if (rows.length) {
+      childrenByParent.set(rows[0].key, [
+        { key: 'ATT1', data: { itemType: 'attachment', contentType: 'application/pdf', linkMode: 'imported_file', path: 'storage:x.pdf', parentItem: rows[0].key } },
+      ]);
+    }
+    return { tops: rows, childrenByParent };
+  },
+  async toItemFields(_cfg, r, opts = {}) {
+    calls.fields += 1;
+    // Mirror the real signature: with attachments supplied, make no request.
+    if (!opts.attachments) await zotStub.fetchItemChildren();
     return {
       title: r.data.title,
       authors: ['A Writer'],
@@ -56,6 +76,7 @@ const zotStub = {
       zoteroVersion: r.version,
       totalPages: 200,
       itemType: 'book',
+      pdfAttachmentKey: (opts.attachments || [])[0]?.key || null,
     };
   },
 };
@@ -63,6 +84,31 @@ const zotStub = {
 const cfg = { zoteroApiKey: 'k', zoteroUserId: '1' };
 
 // -------------------------------------------------------------------- tests
+
+await check('an import costs one request per collection, not one per book', async () => {
+  // The N+1 this replaces: asking each book for its children meant three
+  // hundred serial round trips on a real library, which looked like a hang.
+  ITEMS.SUB1 = Array.from({ length: 40 }, (_, i) => row(`M${i}`, `Book ${i}`, 1));
+  calls.tree = 0; calls.children = 0;
+
+  const plan = await buildPlan(cfg, zotStub, 'ROOT');
+  const books = plan.groups.reduce((n, g) => n + g.items.length, 0);
+
+  ok(books >= 40, `fetched the books (${books})`);
+  eq(calls.children, 0, 'no per-book request');
+  eq(calls.tree, 1 + COLLECTIONS.filter((c) => c.parentCollection === 'ROOT').length,
+    'one tree fetch for the root and one per subcollection');
+
+  ITEMS.SUB1 = [row('M1', 'Method Matters', 1), row('M2', 'On Cases', 1)];
+});
+
+await check('attachments come from the bulk fetch, not a second call', async () => {
+  calls.children = 0;
+  const plan = await buildPlan(cfg, zotStub, 'ROOT');
+  const withPdf = plan.groups.flatMap((g) => g.items).filter((i) => i.pdfAttachmentKey);
+  ok(withPdf.length > 0, 'PDFs were still found');
+  eq(calls.children, 0, 'and without asking per item');
+});
 
 const state = emptyState();
 

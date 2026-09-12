@@ -59,7 +59,10 @@ export function errorToast(err, prefix = '') {
 
 // -------------------------------------------------------------------- modal
 
-let openModalCount = 0;
+// A stack, not a count: Escape must close only the topmost dialog. Each modal
+// used to register its own capture-phase key listener, so one Escape closed the
+// search box AND the Add-a-book form underneath it.
+const modalStack = [];
 
 /**
  * Low-level modal. `render(body, close)` fills the content; the returned promise
@@ -78,19 +81,23 @@ export function openModal({ title, render, width = 'normal', dismissable = true,
     if (title) dialog.setAttribute('aria-label', title);
 
     const previousFocus = document.activeElement;
+    const token = {};
     let settled = false;
     const close = (value = null) => {
       if (settled) return;
       settled = true;
       overlay.remove();
-      openModalCount -= 1;
-      if (openModalCount === 0) document.body.classList.remove('modal-open');
+      const at = modalStack.indexOf(token);
+      if (at >= 0) modalStack.splice(at, 1);
+      if (!modalStack.length) document.body.classList.remove('modal-open');
       document.removeEventListener('keydown', onKey, true);
       if (previousFocus?.focus) setTimeout(() => previousFocus.focus(), 0);
       resolve(value);
     };
 
     const onKey = (e) => {
+      // Only the dialog on top of the stack reacts.
+      if (modalStack[modalStack.length - 1] !== token) return;
       if (e.key === 'Escape' && dismissable) {
         e.stopPropagation();
         close(null);
@@ -128,7 +135,7 @@ export function openModal({ title, render, width = 'normal', dismissable = true,
     });
 
     host.appendChild(overlay);
-    openModalCount += 1;
+    modalStack.push(token);
     document.body.classList.add('modal-open');
     document.addEventListener('keydown', onKey, true);
 
@@ -168,7 +175,7 @@ function trapFocus(container, e) {
  */
 export function openForm({
   title, fields, submitLabel = 'Save', cancelLabel = 'Cancel', width, intro,
-  validate, extraActions, beforeSubmit, onReady,
+  validate, extraActions, beforeSubmit, onReady, toolbar,
 }) {
   return openModal({
     title,
@@ -177,6 +184,15 @@ export function openForm({
       const form = document.createElement('form');
       form.className = 'form';
       form.noValidate = true;
+
+      // Source buttons sit above everything: they are how the form gets
+      // filled, so they should be the first thing seen, not a footer action.
+      let toolbarRow = null;
+      if (toolbar?.length) {
+        toolbarRow = document.createElement('div');
+        toolbarRow.className = 'form__toolbar';
+        form.appendChild(toolbarRow);
+      }
 
       if (intro) {
         const p = document.createElement('p');
@@ -420,6 +436,16 @@ export function openForm({
           form.requestSubmit();
         }
       });
+
+      for (const btn of toolbar || []) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = `source-btn${btn.accent ? ` source-btn--${btn.accent}` : ''}`;
+        b.textContent = btn.label;
+        if (btn.title) b.title = btn.title;
+        b.addEventListener('click', () => btn.onClick(api));
+        toolbarRow.appendChild(b);
+      }
 
       body.appendChild(form);
       onReady?.(api);

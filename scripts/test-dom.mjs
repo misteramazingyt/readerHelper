@@ -143,6 +143,17 @@ function key(k, init = {}) {
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...init }));
 }
 
+/**
+ * Modals listen on `document`, and an event dispatched at `window` never
+ * reaches a document listener. In a browser a keypress bubbles up from the
+ * focused element through document, so this is the faithful route.
+ */
+function keyDoc(k, init = {}) {
+  window.document.dispatchEvent(
+    new window.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...init }),
+  );
+}
+
 await check('boots without throwing', () => {
   eq(pageErrors, [], 'page errors');
   eq(consoleErrors, [], 'console errors');
@@ -466,6 +477,50 @@ await check('the add-book dialog resolves an ISBN without a button press', async
   eq($('.modal [name="year"]').value, '1927', 'year filled in');
   eq($('.modal [name="totalPages"]').value, '278', 'page count filled in');
   ok($('.form__status').textContent.includes('Open Library'), 'says where it came from');
+});
+
+await check('the add dialog offers Goodreads and Zotero search buttons', () => {
+  const labels = $$('.modal .source-btn').map((b) => b.textContent);
+  eq(labels, ['Search Goodreads', 'Search Zotero'], 'both buttons, above the fields');
+  const toolbar = $('.modal .form__toolbar');
+  const firstField = $('.modal .form__row');
+  ok(toolbar && firstField, 'both present');
+  // The toolbar must come first in the document, not be a footer action.
+  ok(toolbar.compareDocumentPosition(firstField) & window.Node.DOCUMENT_POSITION_FOLLOWING,
+    'the buttons are above the fields');
+});
+
+await check('a search button opens a search box seeded from the field', async () => {
+  $('.modal [name="identifier"]').value = 'foucault order of things';
+  click($$('.modal .source-btn').find((b) => b.textContent === 'Search Goodreads'));
+  await tick(40);
+  const boxes = $$('.modal [name="q"]');
+  ok(boxes.length, 'a search box opened');
+  eq(boxes[0].value, 'foucault order of things', 'seeded from what was already typed');
+
+  // Dismiss the search box by its own Cancel. (key() dispatches on window,
+  // which never reaches the modal's document-level listener; in a browser
+  // Escape bubbles up from the focused element, so this is the faithful
+  // stand-in for closing just the top dialog.)
+  const searchModal = $$('.modal').at(-1);
+  click([...searchModal.querySelectorAll('.btn')].find((b) => b.textContent === 'Cancel'));
+  await tick(30);
+  eq($$('.modal').length, 1, 'only the search box closed — Add a book is still open');
+  $('.modal [name="identifier"]').value = '';
+});
+
+await check('Escape closes only the dialog on top of the stack', async () => {
+  // Each modal used to add its own document listener, so one Escape closed the
+  // search box AND the Add-a-book form under it, losing everything typed.
+  eq($$('.modal').length, 1, 'Add a book is open');
+  click($$('.modal .source-btn').find((b) => b.textContent === 'Search Zotero'));
+  await tick(40);
+  eq($$('.modal').length, 2, 'the search box stacked on top');
+
+  keyDoc('Escape');
+  await tick(30);
+  eq($$('.modal').length, 1, 'only the search box closed');
+  ok($('.modal [name="identifier"]'), 'the Add-a-book form survived');
 });
 
 await check('a hand-typed field is not overwritten by a later lookup', async () => {

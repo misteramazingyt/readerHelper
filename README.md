@@ -54,8 +54,15 @@ field resolves itself.
 
 ### Adding a book
 
-Paste anything identifying into the first field and the rest fills in. No button
-to press: it resolves as you type, on paste, and on leaving the field.
+Two buttons at the top of the dialog search **Goodreads** and **your Zotero
+library** directly — type a title or author, pick from the results, and the
+fields fill in. Goodreads results carry the average rating and how many people
+rated it, which is the quickest way to tell the real book from the study guides
+their search likes to rank above it.
+
+Otherwise, paste anything identifying into the first field and the rest fills
+in. No button to press: it resolves as you type, on paste, and on leaving the
+field.
 
 | Paste | Resolved via |
 |---|---|
@@ -661,14 +668,14 @@ Or push to `main` and set Pages → Source → **GitHub Actions**.
 ```
 node scripts/check.mjs         27 modules — imports and element ids resolve
 node scripts/test-store.mjs    22 tests   — board model, linked duplicates, undo
-node scripts/test-ingest.mjs   12 tests   — Zotero import shape, sync safety
-node scripts/test-worker.mjs   30 tests   — auth worker: allowlist, CORS, secrets, Scholar cache
+node scripts/test-ingest.mjs   14 tests   — Zotero import shape, sync safety
+node scripts/test-worker.mjs   32 tests   — auth worker: allowlist, CORS, secrets, Scholar cache
 node scripts/test-citation.mjs 28 tests   — identifier detection and every export format
 node scripts/test-push.mjs     25 tests   — pushing to Zotero, against a fake Zotero API
 node scripts/test-sync.mjs     24 tests   — the merge, and the pull-merge-push loop
-node scripts/test-goodreads.mjs 46 tests  — their CSV, their RSS, the CSV they import, the bot
+node scripts/test-goodreads.mjs 50 tests  — their CSV, their RSS, the CSV they import, the bot
 python scripts/test_protocol.py 10 tests  — what the readerhelper:// handler refuses
-node scripts/test-dom.mjs      41 tests   — boots the real app in jsdom and drives it
+node scripts/test-dom.mjs      44 tests   — boots the real app in jsdom and drives it
 node scripts/test-dnd.mjs      13 tests   — synthesises pointer drags over a fake layout
 node scripts/test-auth.mjs     26 tests   — every outcome of the sign-in gate
 

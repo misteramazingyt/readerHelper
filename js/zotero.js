@@ -96,6 +96,32 @@ export async function fetchItemChildren(cfg, itemKey) {
   return requestAll(cfg, `${libraryPath(cfg)}/items/${itemKey}/children`);
 }
 
+/**
+ * A collection's top-level items AND their child items, in one paginated pass.
+ *
+ * The obvious implementation — fetch the tops, then ask for each one's children
+ * to find its PDF — is an N+1: three hundred books meant three hundred serial
+ * round trips, which on a real library looks exactly like an import that never
+ * finishes. The non-`/top` endpoint returns children alongside their parents,
+ * so the whole collection costs one request per hundred items instead.
+ */
+export async function fetchCollectionTree(cfg, collectionKey, onProgress) {
+  const rows = await requestAll(cfg, `${libraryPath(cfg)}/collections/${collectionKey}/items`, onProgress);
+
+  const tops = [];
+  const childrenByParent = new Map();
+  for (const row of rows) {
+    const parent = row.data?.parentItem;
+    if (parent) {
+      if (!childrenByParent.has(parent)) childrenByParent.set(parent, []);
+      childrenByParent.get(parent).push(row);
+    } else if (!['note', 'annotation'].includes(row.data?.itemType)) {
+      tops.push(row);
+    }
+  }
+  return { tops, childrenByParent };
+}
+
 export async function fetchItem(cfg, itemKey) {
   return request(cfg, `${libraryPath(cfg)}/items/${itemKey}`);
 }
@@ -130,6 +156,21 @@ export async function removeTagFromItem(cfg, itemKey, tag) {
     raw: true,
   });
   return { changed: true };
+}
+
+/**
+ * Search the library by title, creator and year.
+ *
+ * qmode=titleCreatorYear is Zotero's own quick-search: it is what the desktop
+ * search box uses, and it avoids the full-text mode's habit of returning every
+ * PDF that merely mentions the words.
+ */
+export async function searchLibrary(cfg, query, { limit = 25 } = {}) {
+  const q = String(query || '').trim();
+  if (!q) return [];
+  const params = new URLSearchParams({ q, qmode: 'titleCreatorYear', limit: String(limit) });
+  const rows = await request(cfg, `${libraryPath(cfg)}/items/top?${params}`);
+  return rows.filter((r) => !['attachment', 'note', 'annotation'].includes(r.data?.itemType));
 }
 
 // ------------------------------------------------------------- writing back
@@ -329,7 +370,7 @@ export function resolveAttachmentPath(attachment, cfg) {
 }
 
 /** Fold a Zotero item plus its children into the fields readerHelper stores. */
-export async function toItemFields(cfg, row, { withAttachments = true } = {}) {
+export async function toItemFields(cfg, row, { withAttachments = true, attachments = null } = {}) {
   const d = row.data;
   const fields = {
     title: d.title || d.caseName || d.subject || 'Untitled',
@@ -348,7 +389,9 @@ export async function toItemFields(cfg, row, { withAttachments = true } = {}) {
   };
   if (!withAttachments) return fields;
   try {
-    const children = await fetchItemChildren(cfg, row.key);
+    // `attachments` is supplied by the bulk collection fetch; only fall back to
+    // a per-item request when a caller really has nothing else.
+    const children = attachments || await fetchItemChildren(cfg, row.key);
     const pdf = children.find((c) => c.data?.contentType === 'application/pdf');
     if (pdf) {
       fields.pdfAttachmentKey = pdf.key;

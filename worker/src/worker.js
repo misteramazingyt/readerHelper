@@ -71,6 +71,9 @@ export default {
     if (url.pathname === '/goodreads-book' && request.method === 'POST') {
       return handleGoodreadsBook(request, env, ctx, corsOrigin);
     }
+    if (url.pathname === '/goodreads-search' && request.method === 'POST') {
+      return handleGoodreadsSearch(request, env, ctx, corsOrigin);
+    }
 
     return json({ error: 'not_found' }, 404, corsOrigin);
   },
@@ -439,6 +442,55 @@ async function handleGoodreadsBook(request, env, ctx, corsOrigin) {
   const payload = { html: trimmed, bookId };
   ctx.waitUntil(cache.put(cacheKey, new Response(JSON.stringify(payload), {
     headers: { 'Content-Type': 'application/json', 'Cache-Control': 'max-age=86400' },
+  })));
+  return json(payload, 200, corsOrigin);
+}
+
+/**
+ * Proxy a Goodreads search.
+ *
+ * The query is a search term, not a URL: the host and path are fixed here and
+ * only the encoded term varies, so there is nothing for a caller to point
+ * elsewhere. Only the result rows are returned -- a Goodreads search page is
+ * ~160KB, of which the fifteen <tr> blocks are a few percent.
+ */
+async function handleGoodreadsSearch(request, env, ctx, corsOrigin) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: 'bad_request' }, 400, corsOrigin);
+  }
+
+  const q = String(body.q || '').trim().slice(0, 200);
+  if (q.length < 2) {
+    return json({ error: 'bad_request', message: 'Search for at least two characters.' }, 400, corsOrigin);
+  }
+
+  const cacheKey = new Request(`https://goodreads.cache/search/${encodeURIComponent(q.toLowerCase())}`);
+  const cache = caches.default;
+  const hit = await cache.match(cacheKey);
+  if (hit) return json({ ...(await hit.json()), cached: true }, 200, corsOrigin);
+
+  let html;
+  try {
+    const res = await fetch(`https://www.goodreads.com/search?q=${encodeURIComponent(q)}`, {
+      headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml' },
+      redirect: 'follow',
+    });
+    if (!res.ok) {
+      return json({ error: 'goodreads_error', message: `Goodreads returned ${res.status}.` }, 502, corsOrigin);
+    }
+    html = await res.text();
+  } catch (err) {
+    return json({ error: 'goodreads_unreachable', message: String(err) }, 502, corsOrigin);
+  }
+
+  const rows = html.match(/<tr[^>]+itemtype="[^"]*schema\.org\/Book"[\s\S]*?<\/tr>/gi) || [];
+  const payload = { html: rows.slice(0, 20).join('\n'), count: rows.length, query: q };
+
+  ctx.waitUntil(cache.put(cacheKey, new Response(JSON.stringify(payload), {
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'max-age=3600' },
   })));
   return json(payload, 200, corsOrigin);
 }

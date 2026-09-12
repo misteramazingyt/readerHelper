@@ -456,6 +456,46 @@ await check('a book that does not exist is reported as such', async () => {
   eq((await res.json()).error, 'not_found', 'named');
 });
 
+await check('a search is proxied and trimmed to the result rows', async () => {
+  cacheStore.clear();
+  let called = '';
+  const row = '<tr itemscope itemtype="http://schema.org/Book"><td>x</td></tr>';
+  globalThis.fetch = async (url) => {
+    called = String(url);
+    return new Response(`<html><body>${'pad'.repeat(20000)}${row}${row}</body></html>`, { status: 200 });
+  };
+  const res = await worker.fetch(
+    new Request('https://auth.example.workers.dev/goodreads-search', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: APP_ORIGIN },
+      body: JSON.stringify({ q: 'the order of things' }),
+    }),
+    ENV, { waitUntil: (p) => p },
+  );
+  eq(res.status, 200, 'ok');
+  const body = await res.json();
+  eq(body.count, 2, 'counted the rows');
+  ok(called.includes('search?q=the%20order%20of%20things'), `encoded the query (got ${called})`);
+  ok(body.html.length < 500, 'only the rows came back, not the page');
+});
+
+await check('a search term cannot redirect the proxy elsewhere', async () => {
+  cacheStore.clear();
+  let called = '';
+  globalThis.fetch = async (url) => {
+    called = String(url);
+    return new Response('<html></html>', { status: 200 });
+  };
+  await worker.fetch(
+    new Request('https://auth.example.workers.dev/goodreads-search', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: APP_ORIGIN },
+      body: JSON.stringify({ q: 'https://169.254.169.254/latest/' }),
+    }),
+    ENV, { waitUntil: (p) => p },
+  );
+  ok(called.startsWith('https://www.goodreads.com/search?q='), 'host and path are fixed here');
+  ok(!called.includes('169.254.169.254/latest'), 'the term was encoded into the query, not the URL');
+});
+
 // -------------------------------------------------------------------- health
 
 await check('health reports configuration without revealing it', async () => {
