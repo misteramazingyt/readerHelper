@@ -24,6 +24,7 @@ import * as bib from './bibliography.js';
 import * as push from './zotero-push.js';
 import * as goodreads from './goodreads.js';
 import * as gi from './goodreads-ingest.js';
+import { openBookSearch } from './booksearch.js';
 import { AUTH } from './auth-config.js';
 import { parseReading, resolveReading, prettyField, pct, fuzzyScore } from './nlp.js';
 import * as sel from './selection.js';
@@ -116,33 +117,24 @@ export async function promptAddBook(groupId) {
       {
         label: 'Search Goodreads',
         accent: 'goodreads',
-        title: 'Search Goodreads by title, author or ISBN',
-        onClick: (api) => searchAndFill({
-          api,
+        title: 'Search Goodreads and add one or many',
+        onClick: (api) => searchAndAdd({
+          groupId,
           source: 'Goodreads',
           seed: api.get('identifier') || api.get('title'),
-          emptyHint: 'Nothing on Goodreads matched. Their search ranks study guides highly — try adding the author.',
-          runSearch: (q) => goodreads.searchBooks(AUTH.workerUrl, q),
-        }).then((chosen) => { if (chosen) resolved = chosen; }),
+          closeForm: () => api.close(null),
+        }),
       },
       {
         label: 'Search Zotero',
         accent: 'zotero',
-        title: 'Search the books already in your Zotero library',
-        onClick: (api) => searchAndFill({
-          api,
+        title: 'Search your Zotero library and add one or many',
+        onClick: (api) => searchAndAdd({
+          groupId,
           source: 'Zotero',
           seed: api.get('identifier') || api.get('title'),
-          emptyHint: 'Nothing in your Zotero library matched.',
-          runSearch: async (q) => {
-            const cfg = store.getSettings();
-            if (!cfg.zoteroApiKey || !cfg.zoteroUserId) {
-              throw new Error('Add your Zotero API key and user ID in Settings first.');
-            }
-            const rows = await zotero.searchLibrary(cfg, q);
-            return Promise.all(rows.map((r) => zotero.toItemFields(cfg, r, { withAttachments: false })));
-          },
-        }).then((chosen) => { if (chosen) resolved = chosen; }),
+          closeForm: () => api.close(null),
+        }),
       },
     ],
     intro: 'Paste a DOI, ISBN, arXiv id, or a Goodreads / Google Books / archive.org / Open Library link — the rest fills itself in. Or type a title and press Enter to search. Everything can also be entered by hand.',
@@ -216,57 +208,90 @@ export async function promptAddBook(groupId) {
 }
 
 /**
- * Search one named source and let the user pick. Used by the Goodreads and
- * Zotero buttons at the top of "Add a book".
+ * Live search over Zotero or Goodreads, with multi-select, adding straight to
+ * a group.
  *
- * `runSearch` returns candidate records; the picker is the same one the
- * automatic lookup uses, so a result from any source fills the form the same
- * way. Only blank fields are written, as everywhere else.
+ * Zotero is filtered locally from the cached library index, so it narrows as
+ * you type over thousands of items; Goodreads has to be asked, so it is
+ * debounced. Either way the rows that come back are thin — enough to read and
+ * choose — and full details are fetched only for what was actually picked.
  */
-async function searchAndFill({ api, source, seed, runSearch, emptyHint }) {
-  const query = await openForm({
+async function searchAndAdd({ groupId, source, closeForm, seed = '' }) {
+  const cfg = store.getSettings();
+  const isZotero = source === 'Zotero';
+
+  if (isZotero && (!cfg.zoteroApiKey || !cfg.zoteroUserId)) {
+    toast('Add your Zotero API key and user ID in Settings first.', { type: 'error' });
+    return null;
+  }
+
+  let index = null;
+  const picked = await openBookSearch({
     title: `Search ${source}`,
-    submitLabel: 'Search',
-    fields: [{
-      name: 'q',
-      label: `Title, author, or ISBN`,
-      value: seed || '',
-      required: true,
-      autofocus: true,
-    }],
+    source,
+    seed,
+    mode: isZotero ? 'local' : 'remote',
+    prepare: isZotero
+      ? async (report) => { index = await push.loadIndex(store.getSettings(), { onProgress: report }); }
+      : null,
+    search: async (q, { signal }) => {
+      if (isZotero) return push.searchIndex(index, q);
+      const rows = await goodreads.searchBooks(AUTH.workerUrl, q, { signal });
+      return { rows };
+    },
+    toDisplay: (row) => (isZotero
+      ? {
+        title: row.displayTitle || row.title,
+        authors: row.displayAuthors || [],
+        date: row.year || (row.date || '').slice(0, 4),
+        extra: row.type === 'book' ? '' : row.type,
+      }
+      : {
+        title: row.title,
+        authors: row.authors || [],
+        date: row.year || '',
+        extra: row.averageRating
+          ? `★${row.averageRating}${row.ratingsCount ? ` (${row.ratingsCount.toLocaleString()})` : ''}`
+          : '',
+      }),
   });
-  if (!query) return null;
 
-  api.setStatus(`Searching ${source}…`, 'busy');
+  if (!picked?.length) return null;
+
+  const busy = showBusy(`Fetching ${picked.length} book(s)…`);
   try {
-    const results = await runSearch(query.q);
-    if (!results.length) {
-      api.setStatus(emptyHint || `Nothing found on ${source} for “${truncate(query.q, 40)}”.`, 'warn');
-      return null;
-    }
-    api.setStatus(`${results.length} result(s) from ${source} — choose one.`, 'info');
-    const chosen = await pickCandidate(results);
-    if (!chosen) {
-      api.setStatus('Nothing chosen.', 'info');
-      return null;
+    let records;
+    if (isZotero) {
+      // The index holds only what search needs; get the real records now.
+      const rows = await zotero.fetchItemsByKeys(store.getSettings(), picked.map((p) => p.key));
+      records = await Promise.all(rows.map((r) => zotero.toItemFields(store.getSettings(), r, { withAttachments: false })));
+    } else {
+      records = [];
+      for (const [i, row] of picked.entries()) {
+        busy.update(`Fetching ${i + 1}/${picked.length} from Goodreads…`);
+        try {
+          // The search row has no ISBN or page count; the book page does.
+          records.push(await goodreads.fetchBook(AUTH.workerUrl, row.goodreadsId));
+        } catch {
+          records.push(row);   // the search row is still worth adding
+        }
+      }
     }
 
-    const filled = api.fillEmpty({
-      title: [chosen.title, chosen.subtitle].filter(Boolean).join(': '),
-      authors: (chosen.authors || []).join(', '),
-      year: chosen.year,
-      totalPages: chosen.totalPages,
-      url: chosen.url,
-    });
-    api.setStatus(
-      filled.length
-        ? `From ${source}: ${truncate(chosen.title, 48)}`
-        : `From ${source}, but every field is already filled in.`,
-      'ok',
+    const created = store.batch(() => records.map((fields) => store.addItem(groupId, {
+      ...fields,
+      itemType: fields.itemType || 'book',
+    })));
+    busy.done();
+    toast(
+      `Added ${created.length} book${created.length === 1 ? '' : 's'} from ${source}.`,
+      { type: 'success' },
     );
-    return chosen;
+    closeForm?.();
+    return created;
   } catch (err) {
-    api.setStatus(err.message, 'error');
+    busy.done();
+    errorToast(err, source);
     return null;
   }
 }

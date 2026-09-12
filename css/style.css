@@ -917,6 +917,92 @@ kbd {
 .source-btn--zotero { border-left: 3px solid #cc2936; }
 .source-btn--zotero:hover { border-color: #cc2936; }
 
+/* ----------------------------------------------------------- book search */
+
+.booksearch__input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  font-size: 15px;
+}
+
+.booksearch__input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.booksearch__status {
+  padding: 7px 2px;
+  font: 11.5px/1.4 var(--mono);
+  color: var(--ink-3);
+  min-height: 26px;
+}
+
+.booksearch__status.is-busy { color: var(--accent); }
+.booksearch__status.is-error { color: var(--danger); }
+
+.booksearch__list {
+  height: 52dvh;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+/* A dense grid, so as many books as possible are on screen to scan. */
+.booksearch__row {
+  display: grid;
+  grid-template-columns: 22px minmax(90px, 1.1fr) minmax(0, 3fr) 52px auto;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  font-size: 12.5px;
+  user-select: none;
+}
+
+.booksearch__row:last-child { border-bottom: none; }
+.booksearch__row:hover { background: var(--surface-2); }
+
+.booksearch__row.is-cursor { box-shadow: inset 2px 0 0 var(--accent); }
+
+.booksearch__row.is-chosen {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.booksearch__row.is-chosen:hover {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.booksearch__check { width: 15px; height: 15px; cursor: pointer; }
+
+.booksearch__author,
+.booksearch__title,
+.booksearch__date,
+.booksearch__extra {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.booksearch__author { color: var(--ink-2); }
+.booksearch__title { font-weight: 500; }
+.booksearch__date { color: var(--ink-3); font: 11px/1.4 var(--mono); text-align: right; }
+.booksearch__extra { color: var(--ink-3); font: 11px/1.4 var(--mono); }
+.booksearch__empty { padding: 20px 12px; color: var(--ink-3); font-size: 13px; text-align: center; }
+.booksearch__count { font-size: 12.5px; color: var(--ink-2); }
+
+@media (max-width: 720px) {
+  /* No room for four columns on a phone: author and title stack, the rest go. */
+  .booksearch__row { grid-template-columns: 22px 1fr; gap: 4px 10px; padding: 8px 10px; }
+  .booksearch__author { grid-column: 2; order: 2; font-size: 11.5px; }
+  .booksearch__title { grid-column: 2; order: 1; white-space: normal; }
+  .booksearch__date { grid-column: 2; order: 3; text-align: left; }
+  .booksearch__extra { display: none; }
+  .booksearch__list { height: 46dvh; }
+}
+
 /* ------------------------------------------------- form status + candidates */
 
 .form__status {

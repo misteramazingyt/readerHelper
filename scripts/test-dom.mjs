@@ -490,37 +490,24 @@ await check('the add dialog offers Goodreads and Zotero search buttons', () => {
     'the buttons are above the fields');
 });
 
-await check('a search button opens a search box seeded from the field', async () => {
-  $('.modal [name="identifier"]').value = 'foucault order of things';
+await check('a search button opens the live panel, seeded from the field', async () => {
+  $('.modal [name="identifier"]').value = 'foucault';
   click($$('.modal .source-btn').find((b) => b.textContent === 'Search Goodreads'));
-  await tick(40);
-  const boxes = $$('.modal [name="q"]');
-  ok(boxes.length, 'a search box opened');
-  eq(boxes[0].value, 'foucault order of things', 'seeded from what was already typed');
-
-  // Dismiss the search box by its own Cancel. (key() dispatches on window,
-  // which never reaches the modal's document-level listener; in a browser
-  // Escape bubbles up from the focused element, so this is the faithful
-  // stand-in for closing just the top dialog.)
-  const searchModal = $$('.modal').at(-1);
-  click([...searchModal.querySelectorAll('.btn')].find((b) => b.textContent === 'Cancel'));
-  await tick(30);
-  eq($$('.modal').length, 1, 'only the search box closed — Add a book is still open');
-  $('.modal [name="identifier"]').value = '';
+  await tick(60);
+  const box = $('.booksearch__input');
+  ok(box, 'the live panel opened');
+  eq(box.value, 'foucault', 'seeded from what was already typed');
+  eq($$('.modal').length, 2, 'stacked on top of Add a book');
 });
 
 await check('Escape closes only the dialog on top of the stack', async () => {
   // Each modal used to add its own document listener, so one Escape closed the
-  // search box AND the Add-a-book form under it, losing everything typed.
-  eq($$('.modal').length, 1, 'Add a book is open');
-  click($$('.modal .source-btn').find((b) => b.textContent === 'Search Zotero'));
-  await tick(40);
-  eq($$('.modal').length, 2, 'the search box stacked on top');
-
+  // search panel AND the Add-a-book form under it, losing everything typed.
   keyDoc('Escape');
-  await tick(30);
-  eq($$('.modal').length, 1, 'only the search box closed');
+  await tick(40);
+  eq($$('.modal').length, 1, 'only the search panel closed');
   ok($('.modal [name="identifier"]'), 'the Add-a-book form survived');
+  $('.modal [name="identifier"]').value = '';
 });
 
 await check('a hand-typed field is not overwritten by a later lookup', async () => {
@@ -710,6 +697,122 @@ await check('a project export counts a linked copy only once', () => {
 
   eq(actionsMod.itemsOfGroup(otherGroup).length >= 1, true, 'the copy is in the other group');
   eq(actionsMod.itemsOfProject(projectId).length, before, 'but the project still lists it once');
+});
+
+// ------------------------------------------------- the live search panel
+
+const { openBookSearch } = await import(pathToFileURL(join(root, 'js', 'booksearch.js')).href);
+
+const LIBRARY = [
+  { key: 'a', displayTitle: 'The Order of Things', displayAuthors: ['Michel Foucault'], year: '1966', title: 'order of things', allNames: 'michel foucault' },
+  { key: 'b', displayTitle: 'Discipline and Punish', displayAuthors: ['Michel Foucault'], year: '1975', title: 'discipline and punish', allNames: 'michel foucault' },
+  { key: 'c', displayTitle: 'The History of Sexuality', displayAuthors: ['Michel Foucault'], year: '1976', title: 'history of sexuality', allNames: 'michel foucault' },
+  { key: 'd', displayTitle: 'A Theory of Justice', displayAuthors: ['John Rawls'], year: '1971', title: 'theory of justice', allNames: 'john rawls' },
+];
+
+const pushMod = await import(pathToFileURL(join(root, 'js', 'zotero-push.js')).href);
+
+/** Open the panel over the fixture library; resolves when it closes. */
+function openPanel(seed = '') {
+  return openBookSearch({
+    title: 'Search Zotero',
+    source: 'Zotero',
+    mode: 'local',
+    seed,
+    search: async (q) => pushMod.searchIndex({ entries: LIBRARY }, q),
+    toDisplay: (r) => ({ title: r.displayTitle, authors: r.displayAuthors, date: r.year }),
+  });
+}
+
+const rowTitles = () => $$('.booksearch__title').map((n) => n.textContent);
+const clickRow = (i, init = {}) => click($$('.booksearch__row')[i], init);
+
+await check('the panel narrows as you type, with no button to press', async () => {
+  const pending = openPanel();
+  await tick(120);
+  eq(rowTitles().length, 4, 'everything to begin with');
+
+  const box = $('.booksearch__input');
+  box.value = 'foucault';
+  box.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await tick(150);
+  eq(rowTitles().length, 3, 'narrowed by author');
+
+  box.value = 'foucault history';
+  box.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await tick(150);
+  eq(rowTitles(), ['The History of Sexuality'], 'every word has to match');
+
+  ok($('.booksearch__status').textContent.includes('of 4'), 'says how many of how many');
+  click($$('.btn').find((b) => b.textContent === 'Cancel'));
+  eq(await pending, null, 'cancel returns nothing');
+});
+
+await check('a plain click selects one row; clicking it again clears it', async () => {
+  const pending = openPanel();
+  await tick(120);
+  clickRow(0);
+  eq($$('.booksearch__row.is-chosen').length, 1, 'one selected');
+  clickRow(1);
+  eq($$('.booksearch__row.is-chosen').length, 1, 'still one — the selection moved');
+  clickRow(1);
+  eq($$('.booksearch__row.is-chosen').length, 0, 'clicking the only selection clears it');
+  click($$('.btn').find((b) => b.textContent === 'Cancel'));
+  await pending;
+});
+
+await check('ctrl-click adds to the selection without disturbing it', async () => {
+  const pending = openPanel();
+  await tick(120);
+  clickRow(0);
+  clickRow(2, { ctrlKey: true });
+  clickRow(3, { metaKey: true });
+  eq($$('.booksearch__row.is-chosen').length, 3, 'three selected');
+  eq($$('.booksearch__check:checked').length, 3, 'and their tickboxes are ticked');
+
+  const add = $$('.btn').find((b) => b.textContent.startsWith('Add '));
+  eq(add.textContent, 'Add 3 books', 'the button counts them');
+  const chosen = await (click(add), pending);
+  eq(chosen.map((r) => r.key), ['a', 'c', 'd'], 'all three came back');
+});
+
+await check('shift-click takes the range between', async () => {
+  const pending = openPanel();
+  await tick(120);
+  clickRow(0);
+  clickRow(2, { shiftKey: true });
+  eq($$('.booksearch__row.is-chosen').length, 3, 'the run is selected');
+  const chosen = await (click($$('.btn').find((b) => b.textContent.startsWith('Add '))), pending);
+  eq(chosen.map((r) => r.key), ['a', 'b', 'c'], 'in list order');
+});
+
+await check('the tickbox itself adds without clearing the rest', async () => {
+  const pending = openPanel();
+  await tick(120);
+  clickRow(0);
+  click($$('.booksearch__check')[3]);
+  eq($$('.booksearch__row.is-chosen').length, 2, 'both kept');
+  click($$('.btn').find((b) => b.textContent === 'Cancel'));
+  await pending;
+});
+
+await check('Add is disabled until something is chosen', async () => {
+  const pending = openPanel();
+  await tick(120);
+  const add = $$('.btn').find((b) => b.textContent === 'Add');
+  ok(add.disabled, 'disabled with nothing selected');
+  clickRow(0);
+  ok(!$$('.btn').find((b) => b.textContent.startsWith('Add ')).disabled, 'enabled once a row is picked');
+  click($$('.btn').find((b) => b.textContent === 'Cancel'));
+  await pending;
+});
+
+await check('the panel opens pre-filtered when seeded', async () => {
+  const pending = openPanel('rawls');
+  await tick(160);
+  eq(rowTitles(), ['A Theory of Justice'], 'already narrowed');
+  click($$('.btn').find((b) => b.textContent === 'Cancel'));
+  await pending;
 });
 
 await check('state persisted to localStorage', () => {

@@ -240,6 +240,29 @@ const MUTATIONS = [
     suite: 'test-dom.mjs',
   },
   {
+    name: 'search stops requiring every word to match',
+    file: 'js/zotero-push.js',
+    find: '      if (!hay.includes(w)) { ok = false; break; }',
+    replace: '',
+    suite: 'test-dom.mjs',
+  },
+  {
+    name: 'ctrl-click clears the selection instead of adding to it',
+    file: 'js/booksearch.js',
+    // Making the additive branch clear first is the bug: ctrl-click would
+    // throw away everything already ticked.
+    find: 'if (additive) {',
+    replace: 'if (additive) { chosen.clear();',
+    suite: 'test-dom.mjs',
+  },
+  {
+    name: 'shift-click selects one row rather than the range',
+    file: 'js/booksearch.js',
+    find: '        for (let j = lo; j <= hi; j += 1) chosen.set(keyOf(rows[j], j), rows[j]);',
+    replace: '        chosen.set(keyOf(rows[i], i), rows[i]);',
+    suite: 'test-dom.mjs',
+  },
+  {
     name: 'project export stops de-duplicating linked copies',
     file: 'js/actions.js',
     find: 'if (seen.has(item.id)) continue;   // a linked copy in two groups counts once',
@@ -252,6 +275,23 @@ let caught = 0;
 let missed = 0;
 let skipped = 0;
 
+// A run killed between the write and the restore leaves a real defect in a real
+// source file — it happened, and the broken file very nearly shipped. Hold the
+// pristine copy where a signal handler can put it back.
+let inFlight = null;
+const restoreInFlight = () => {
+  if (!inFlight) return;
+  writeFileSync(inFlight.path, inFlight.original);
+  console.error(`
+Interrupted — restored ${inFlight.path}`);
+  inFlight = null;
+};
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) {
+  process.on(sig, () => { restoreInFlight(); process.exit(130); });
+}
+process.on('exit', restoreInFlight);
+process.on('uncaughtException', (err) => { restoreInFlight(); throw err; });
+
 for (const m of MUTATIONS) {
   const path = join(root, m.file);
   const original = readFileSync(path, 'utf8');
@@ -262,6 +302,7 @@ for (const m of MUTATIONS) {
     continue;
   }
 
+  inFlight = { path, original };
   writeFileSync(path, original.replace(m.find, m.replace));
   let failed = false;
   let detail = '';
@@ -276,6 +317,7 @@ for (const m of MUTATIONS) {
     detail = (out.split('\n').find((l) => l.trim().startsWith('•')) || '').trim();
   } finally {
     writeFileSync(path, original);
+    inFlight = null;
   }
 
   if (failed) {

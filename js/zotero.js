@@ -173,6 +173,18 @@ export async function searchLibrary(cfg, query, { limit = 25 } = {}) {
   return rows.filter((r) => !['attachment', 'note', 'annotation'].includes(r.data?.itemType));
 }
 
+/** Fetch specific items by key, in chunks Zotero will accept. */
+export async function fetchItemsByKeys(cfg, keys) {
+  const out = [];
+  const unique = [...new Set(keys)].filter(Boolean);
+  for (let i = 0; i < unique.length; i += 40) {
+    const chunk = unique.slice(i, i + 40);
+    const rows = await request(cfg, `${libraryPath(cfg)}/items?itemKey=${chunk.join(',')}&limit=100`);
+    out.push(...rows);
+  }
+  return out;
+}
+
 // ------------------------------------------------------------- writing back
 
 /**

@@ -54,15 +54,35 @@ field resolves itself.
 
 ### Adding a book
 
-Two buttons at the top of the dialog search **Goodreads** and **your Zotero
-library** directly — type a title or author, pick from the results, and the
-fields fill in. Goodreads results carry the average rating and how many people
-rated it, which is the quickest way to tell the real book from the study guides
-their search likes to rank above it.
+Two buttons at the top of the dialog open a **live search** over **Goodreads**
+or **your Zotero library**. No Search button: the list narrows as you type.
+
+Pick more than one and add them together:
+
+| | |
+|---|---|
+| click | select just that row (click it again to clear) |
+| <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+click, or the tickbox | add to the selection |
+| <kbd>Shift</kbd>+click | take the whole run between |
+| <kbd>↑</kbd> <kbd>↓</kbd> · <kbd>Ctrl</kbd>+<kbd>Space</kbd> · <kbd>Enter</kbd> | move · tick · add |
+
+**Zotero is filtered locally**, from the cached library index, so it narrows
+instantly over thousands of items — a request per keystroke could never feel
+like that. The first search reads the library once and caches it. Every
+whitespace-separated word must match the title or an author, so `foucault order`
+finds the book without the exact title.
+
+**Goodreads has to be asked**, so it is debounced and each search aborts the one
+before it. Results carry the average rating and how many people gave it, which is
+the quickest way to tell the real book from the study guides their relevance
+ranking likes to put above it.
+
+Either way the rows are thin — enough to read and choose — and the full record
+is fetched only for what you actually picked.
 
 Otherwise, paste anything identifying into the first field and the rest fills
-in. No button to press: it resolves as you type, on paste, and on leaving the
-field.
+in. No button to press there either: it resolves as you type, on paste, and on
+leaving the field.
 
 | Paste | Resolved via |
 |---|---|
@@ -631,6 +651,7 @@ js/
   zotero-push.js   board -> Zotero: collection tree, duplicate matching
   merge.js     record-level merge + tombstones, for two machines
   boardsync.js the pull-merge-push loop and its triggers
+  booksearch.js    the live multi-select search panel
   goodreads.js     their CSV and RSS in, their import CSV out
   goodreads-ingest.js  grouping, matching, and applying to the board
   dnd.js       pointer-based drag and drop (mouse + touch)
@@ -675,7 +696,7 @@ node scripts/test-push.mjs     25 tests   — pushing to Zotero, against a fake 
 node scripts/test-sync.mjs     24 tests   — the merge, and the pull-merge-push loop
 node scripts/test-goodreads.mjs 50 tests  — their CSV, their RSS, the CSV they import, the bot
 python scripts/test_protocol.py 10 tests  — what the readerhelper:// handler refuses
-node scripts/test-dom.mjs      44 tests   — boots the real app in jsdom and drives it
+node scripts/test-dom.mjs      51 tests   — boots the real app in jsdom and drives it
 node scripts/test-dnd.mjs      13 tests   — synthesises pointer drags over a fake layout
 node scripts/test-auth.mjs     26 tests   — every outcome of the sign-in gate
 

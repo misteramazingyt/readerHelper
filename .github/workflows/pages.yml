@@ -30,6 +30,8 @@ jobs:
       # The app itself has no dependencies; jsdom is only for the smoke test.
       - name: Resolve imports and element ids
         run: node scripts/check.mjs
+      - name: No leftover mutation defects
+        run: node scripts/mutate-verify.mjs
       - name: Board model tests
         run: node scripts/test-store.mjs
       - name: Zotero ingest tests

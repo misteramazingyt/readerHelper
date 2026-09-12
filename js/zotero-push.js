@@ -18,7 +18,9 @@
 
 import * as zotero from './zotero.js';
 
-const INDEX_KEY = 'readerHelper.zoteroIndex.v1';
+// v2 added the display fields the live search needs; a v1 cache is ignored
+// and rebuilt rather than migrated.
+const INDEX_KEY = 'readerHelper.zoteroIndex.v2';
 const DEFAULT_ROOT = '01 Projects';
 
 // --------------------------------------------------------------- normalising
@@ -74,16 +76,23 @@ export function surnameOf(name) {
  */
 export function fingerprint(row) {
   const d = row.data || {};
+  const creators = zotero.creatorNames(d);
   return {
     key: row.key,
     version: row.version,
     type: d.itemType,
+    // Normalised for matching...
     title: normTitle(d.title || ''),
+    // ...and kept verbatim, because the search results have to be readable.
+    displayTitle: d.title || '',
+    displayAuthors: creators.slice(0, 3),
+    date: d.date || '',
     doi: normDoi(zotero.extractDoi(d) || ''),
     isbns: zotero.extractIsbns(d),
     url: normUrl(d.url || ''),
     year: (String(d.date || '').match(/\b(1\d{3}|20\d{2})\b/) || [])[1] || '',
-    surname: surnameOf(zotero.creatorNames(d)[0] || ''),
+    surname: surnameOf(creators[0] || ''),
+    allNames: creators.map((n) => normTitle(n)).join(' '),
     collections: d.collections || [],
   };
 }
@@ -221,6 +230,40 @@ export function findMatch(index, item) {
   }
 
   return null;
+}
+
+/**
+ * Filter the cached index locally — no network, so it narrows as you type even
+ * over a library of thousands.
+ *
+ * Every whitespace-separated word must match something (title or author), which
+ * is how "foucault order" finds the right book without needing the exact title.
+ */
+export function searchIndex(index, query, { limit = 200 } = {}) {
+  const words = normTitle(query).split(' ').filter(Boolean);
+  const entries = index?.entries || [];
+  if (!words.length) {
+    return { rows: entries.slice(0, limit), matched: entries.length, total: entries.length };
+  }
+
+  const scored = [];
+  for (const e of entries) {
+    const hay = `${e.title} ${e.allNames || e.surname || ''} ${e.year || ''}`;
+    let ok = true;
+    for (const w of words) {
+      if (!hay.includes(w)) { ok = false; break; }
+    }
+    if (!ok) continue;
+    // Prefer a title that starts with the query, then shorter titles.
+    const starts = e.title.startsWith(words[0]) ? 0 : 1;
+    scored.push({ e, rank: starts * 1000 + Math.min(e.title.length, 999) });
+  }
+  scored.sort((a, b) => a.rank - b.rank || a.e.title.localeCompare(b.e.title));
+  return {
+    rows: scored.slice(0, limit).map((s) => s.e),
+    matched: scored.length,
+    total: entries.length,
+  };
 }
 
 // -------------------------------------------------------------- collections
