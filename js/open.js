@@ -110,6 +110,21 @@ export function openLocalPdf(item, settings = {}) {
   return { ok: false, message: 'No PDF linked to this book.' };
 }
 
+/**
+ * Trigger a local readerhelper:// action other than opening a PDF — currently
+ * the Goodreads uploader. Fire-and-forget: a protocol handoff gives the page no
+ * way to learn whether anything answered, which is why the caller says what it
+ * attempted rather than claiming it worked.
+ */
+export function runLocalAction(action, params = {}) {
+  const qs = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''),
+  );
+  const uri = `readerhelper://${action}${qs.toString() ? `?${qs}` : ''}`;
+  fireProtocol(uri);
+  return uri;
+}
+
 export function hasZoteroLink(item) {
   return Boolean(item.citekey || item.zoteroKey);
 }

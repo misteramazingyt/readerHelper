@@ -53,22 +53,34 @@ def alert(message: str, title: str = APP, icon: int = 0x30) -> None:
         print(message, file=sys.stderr)
 
 
-def parse(argv: list[str]) -> tuple[str | None, int | None, str | None]:
+ACTIONS = {"open", "goodreads-upload"}
+
+
+def parse_action(argv: list[str]) -> tuple[str | None, dict, str | None]:
+    """Split the URL into an action and its query, validating the scheme."""
     if len(argv) < 2:
-        return None, None, "No URL was passed to the handler."
+        return None, {}, "No URL was passed to the handler."
 
     raw = argv[1].strip().strip('"')
     parts = urllib.parse.urlsplit(raw)
 
     if parts.scheme.lower() != "readerhelper":
-        return None, None, f"Unexpected scheme: {parts.scheme!r}"
+        return None, {}, f"Unexpected scheme: {parts.scheme!r}"
 
     # Windows may hand us readerhelper://open?... or readerhelper:open?...
-    action = (parts.netloc or parts.path.lstrip("/")).split("?", 1)[0].lower()
-    if action and action != "open":
-        return None, None, f"Unknown action: {action!r}"
+    action = (parts.netloc or parts.path.lstrip("/")).split("?", 1)[0].lower() or "open"
+    if action not in ACTIONS:
+        return None, {}, f"Unknown action: {action!r}"
 
-    query = urllib.parse.parse_qs(parts.query)
+    return action, urllib.parse.parse_qs(parts.query), None
+
+
+def parse(argv: list[str]) -> tuple[str | None, int | None, str | None]:
+    action, query, err = parse_action(argv)
+    if err:
+        return None, None, err
+    if action != "open":
+        return None, None, f"Unknown action: {action!r}"
     path = (query.get("path") or [""])[0]
     if not path:
         return None, None, "The URL carried no path."
@@ -137,7 +149,53 @@ def open_pdf(path: str, page: int | None) -> str | None:
         return f"Windows could not open the PDF:\n\n{path}\n\n{err}"
 
 
+def run_goodreads_upload(query: dict) -> str | None:
+    """Hand off to the Goodreads uploader, which lives beside this script.
+
+    Nothing from the URL reaches a shell: only a filename is taken, it is
+    stripped to its basename, and the uploader itself resolves it inside the
+    downloads folder. The URL cannot name an arbitrary path.
+    """
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "goodreads_upload.mjs")
+    if not os.path.isfile(script):
+        return f"The uploader is missing:\n\n{script}"
+
+    node = shutil.which("node")
+    if not node:
+        return "Node is not on PATH, so the Goodreads uploader cannot run."
+
+    cmd = [node, script]
+    name = (query.get("name") or [""])[0]
+    if name:
+        safe = os.path.basename(name)
+        if not safe.lower().endswith(".csv"):
+            return f"Refusing a non-CSV filename:\n\n{name}"
+        cmd += ["--name", safe]
+
+    kwargs: dict = {}
+    if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        # Detached: the browser run takes a while and the handler must return.
+        subprocess.Popen(cmd, cwd=os.path.dirname(script), **kwargs)
+    except OSError as err:
+        return f"Could not start the uploader:\n\n{err}"
+    return None
+
+
 def main() -> int:
+    action, query, err = parse_action(sys.argv)
+    if err:
+        alert(err)
+        return 2
+
+    if action == "goodreads-upload":
+        err = run_goodreads_upload(query)
+        if err:
+            alert(err)
+            return 6
+        return 0
+
     path, page, err = parse(sys.argv)
     if err:
         alert(err)

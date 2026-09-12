@@ -5,3 +5,5 @@ scratch/
 Thumbs.db
 *.local
 secrets.json
+tools/.goodreads-profile/
+tools/.goodreads-debug/

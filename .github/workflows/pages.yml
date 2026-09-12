@@ -44,6 +44,8 @@ jobs:
         run: node scripts/test-sync.mjs
       - name: Goodreads tests
         run: node scripts/test-goodreads.mjs
+      - name: Protocol handler guards
+        run: python3 scripts/test_protocol.py
       - name: Install jsdom
         run: npm install --no-save --no-audit --no-fund jsdom
       - name: Boot the app and drive it

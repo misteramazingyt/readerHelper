@@ -1306,8 +1306,15 @@ export async function exportForGoodreads(entries, label = 'readerHelper') {
     title: `Add ${entries.length} book${entries.length === 1 ? '' : 's'} to Goodreads`,
     submitLabel: 'Download CSV',
     width: 'wide',
-    intro: 'Goodreads has no write API, so this produces the CSV their importer takes. Download it, then upload it at goodreads.com/review/import.',
+    intro: 'Goodreads has no write API, so this produces the CSV their importer takes. Either upload it yourself, or let the local bot do it — see README, Goodreads.',
     fields: [
+      {
+        name: 'autoUpload',
+        label: 'Upload it for me',
+        type: 'checkbox',
+        value: Boolean(store.getSettings().goodreadsAutoUpload),
+        hint: 'Hands the file to the local uploader (tools/goodreads_upload.mjs). Needs the readerhelper:// handler installed and one manual sign-in.',
+      },
       {
         name: 'shelfFromGroup',
         label: 'Shelve each book under its group name',
@@ -1345,7 +1352,20 @@ export async function exportForGoodreads(entries, label = 'readerHelper') {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 
-  toast(`Saved ${a.download}. Upload it at goodreads.com/review/import.`, { type: 'success', timeout: 8000 });
+  store.saveSettings({ goodreadsAutoUpload: Boolean(values.autoUpload) });
+
+  if (values.autoUpload) {
+    // The download lands in the browser's own folder, which the page cannot
+    // read; the uploader is told the filename and finds it there itself.
+    opener.runLocalAction('goodreads-upload', { name: a.download });
+    toast(
+      `Saved ${a.download} and asked the local uploader to send it. `
+      + 'If nothing happens, the handler or the sign-in is missing — see README.',
+      { type: 'info', timeout: 9000 },
+    );
+  } else {
+    toast(`Saved ${a.download}. Upload it at goodreads.com/review/import.`, { type: 'success', timeout: 8000 });
+  }
   return csv;
 }
 

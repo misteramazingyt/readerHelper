@@ -6,6 +6,9 @@
   "description": "Kanban reading tracker wired to Zotero and Todoist.",
   "scripts": {
     "sync": "node scripts/nightly_sync.mjs",
-    "check": "node scripts/check.mjs"
+    "check": "node scripts/check.mjs",
+    "goodreads:setup": "npm install --no-save playwright && npx playwright install chromium",
+    "goodreads:login": "node tools/goodreads_upload.mjs --login",
+    "goodreads:upload": "node tools/goodreads_upload.mjs"
   }
 }

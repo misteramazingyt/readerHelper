@@ -377,6 +377,74 @@ await check('the shelf feed URL is built correctly', () => {
   has(shelfRssUrl('1', 'to read'), 'shelf=to%20read', 'shelf is encoded');
 });
 
+// ========================================================= the upload bot
+
+import { mkdtempSync, writeFileSync, utimesSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import {
+  parseArgs, resolveCsv, classifyOutcome, isSignedOutUrl,
+} from '../tools/goodreads_upload.mjs';
+
+await check('the uploader reads its arguments', () => {
+  eq(parseArgs(['--login']).login, true, 'login');
+  eq(parseArgs(['--headed', '--dry-run']).dryRun, true, 'dry run');
+  eq(parseArgs(['--file', 'x.csv']).file, 'x.csv', 'explicit file');
+  eq(parseArgs(['--name', 'y.csv']).name, 'y.csv', 'name in downloads');
+  eq(parseArgs(['--timeout', '5000']).timeoutMs, 10_000, 'a silly timeout is floored');
+  eq(parseArgs([]).file, null, 'nothing by default');
+  // The value must not be mistaken for the next flag.
+  eq(parseArgs(['--file', 'a.csv', '--headed']).headed, true, 'flags after a value still parse');
+});
+
+await check('it picks the newest export when not told which', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rh-gr-'));
+  const older = join(dir, 'goodreads-old.csv');
+  const newer = join(dir, 'goodreads-new.csv');
+  writeFileSync(older, 'a');
+  writeFileSync(newer, 'b');
+  const past = new Date(Date.now() - 60_000);
+  utimesSync(older, past, past);
+  writeFileSync(join(dir, 'unrelated.csv'), 'c');
+  writeFileSync(join(dir, 'goodreads-notes.txt'), 'd');
+
+  const picked = resolveCsv({ dir });
+  eq(picked.path, newer, 'took the most recent');
+  eq(picked.pickedNewestOf, 2, 'only the goodreads-*.csv files were candidates');
+});
+
+await check('it can be pointed at one file, by path or by name', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rh-gr-'));
+  const p = join(dir, 'goodreads-pick.csv');
+  writeFileSync(p, 'x');
+  eq(resolveCsv({ file: p }).path, p, 'by path');
+  eq(resolveCsv({ name: 'goodreads-pick.csv', dir }).path, p, 'by name');
+  // A name is a name, not a path: traversal is stripped before it is used.
+  eq(resolveCsv({ name: '../../../etc/passwd', dir }).error !== undefined, true, 'traversal refused');
+});
+
+await check('it says what is wrong rather than uploading nothing', () => {
+  const empty = mkdtempSync(join(tmpdir(), 'rh-gr-'));
+  has(resolveCsv({ dir: empty }).error, 'No goodreads-', 'nothing to upload');
+  has(resolveCsv({ file: '/definitely/not/here.csv' }).error, 'No such file', 'missing file');
+  has(resolveCsv({ dir: '/definitely/not/a/folder' }).error, 'No downloads folder', 'missing folder');
+});
+
+await check('it can tell what Goodreads said afterwards', () => {
+  eq(classifyOutcome('https://www.goodreads.com/review/import', 'Your import is in progress').ok, true, 'queued');
+  eq(classifyOutcome('https://www.goodreads.com/review/import', 'Successfully imported 12 books').ok, true, 'done');
+  eq(classifyOutcome('https://www.goodreads.com/user/new', 'Sign in').reason, 'signed-out', 'bounced to sign-in');
+  eq(classifyOutcome('https://www.goodreads.com/review/import', 'There was a problem with your file').ok, false, 'rejected');
+  // Unrecognised is not success: it keeps the evidence instead of claiming it worked.
+  eq(classifyOutcome('https://www.goodreads.com/review/import', 'something unfamiliar').ok, null, 'unclear');
+});
+
+await check('a sign-in URL is recognised, including the Amazon one', () => {
+  eq(isSignedOutUrl('https://www.goodreads.com/user/new'), true, 'goodreads sign-up wall');
+  eq(isSignedOutUrl('https://www.amazon.com/ap/signin?openid=x'), true, 'amazon sign-in');
+  eq(isSignedOutUrl('https://www.goodreads.com/review/import'), false, 'the real page');
+});
+
 // ------------------------------------------------------------------- report
 
 if (failures.length) {

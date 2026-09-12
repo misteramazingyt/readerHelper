@@ -192,6 +192,48 @@ dialog tells you how many of the selected books have one.
 
 Each book also gets **Open in Goodreads** in its menu.
 
+#### Letting a bot do the upload
+
+Tick **Upload it for me** in the export dialog and the CSV is handed to a local
+bot instead of sitting in your Downloads folder waiting for you.
+
+It never logs in. Goodreads sign-in goes through Amazon — bot detection,
+CAPTCHAs, often an OTP — and automating that with a stored password would be
+both fragile and a bad idea for your Amazon account. Instead the bot drives a
+browser profile that **you sign into once, by hand**; every run after that is
+headless and reuses that session. No credential passes through it.
+
+It also drives the real form rather than forging the POST. Goodreads is Rails
+and the page carries a CSRF token; letting the browser submit makes the token,
+the cookies and the multipart encoding Goodreads' problem, not ours.
+
+```bash
+npm run goodreads:setup     # once: Playwright + Chromium, ~130MB, local only
+npm run goodreads:login     # once: a window opens, you sign in, it saves
+npm run goodreads:upload    # headless; takes the newest goodreads-*.csv
+```
+
+After that the checkbox in the app does it for you, through the same
+`readerhelper://` handler that opens PDFs. The URL can only carry a *filename* —
+it is stripped to a basename and refused unless it ends `.csv`, so a page cannot
+name an arbitrary path.
+
+| Flag | |
+|---|---|
+| `--file <path>` | upload a specific file |
+| `--name <file>` | a filename in Downloads |
+| `--headed` | watch it happen |
+| `--dry-run` | say what would be uploaded, then stop |
+
+The session lives in `tools/.goodreads-profile` (gitignored). When it expires
+the bot says so and stops rather than guessing. If Goodreads answers with
+something it does not recognise it **does not claim success** — it saves a
+screenshot and the HTML to `tools/.goodreads-debug` and tells you where.
+
+**Automated access is against the Goodreads Terms of Service.** It is your
+account and your data, so it is your call, but if they notice it is your account
+at risk. The manual download is always there.
+
 ### Ordering
 
 Projects, groups and books each carry their own view: **Custom** (your
@@ -578,7 +620,7 @@ js/
   auth-config.js  public OAuth settings (no secrets)
   main.js      wiring
 scripts/       checks, tests, nightly sync
-tools/         readerhelper:// protocol handler
+tools/         readerhelper:// protocol handler, Goodreads upload bot
 worker/        Cloudflare Worker: OAuth code-for-token exchange
 ```
 
@@ -608,7 +650,8 @@ node scripts/test-worker.mjs   27 tests   — auth worker: allowlist, CORS, secr
 node scripts/test-citation.mjs 27 tests   — identifier detection and every export format
 node scripts/test-push.mjs     25 tests   — pushing to Zotero, against a fake Zotero API
 node scripts/test-sync.mjs     24 tests   — the merge, and the pull-merge-push loop
-node scripts/test-goodreads.mjs 33 tests  — their CSV, their RSS, and the CSV they import
+node scripts/test-goodreads.mjs 39 tests  — their CSV, their RSS, the CSV they import, the bot
+python scripts/test_protocol.py 10 tests  — what the readerhelper:// handler refuses
 node scripts/test-dom.mjs      41 tests   — boots the real app in jsdom and drives it
 node scripts/test-dnd.mjs      13 tests   — synthesises pointer drags over a fake layout
 node scripts/test-auth.mjs     26 tests   — every outcome of the sign-in gate
@@ -649,9 +692,10 @@ before the checksum ran), and that the project-level de-duplication of linked
 copies was untested (the fixture duplicated a book inside one group, where a
 lower-level check already collapsed it). It now covers eleven defects across
 matching, escaping, collection lookup, the Zotero push and cross-device sync —
-twenty-two defects in all, including "sync overwrites instead of merging", "a
-new machine creates its own Gist", and "the shelf proxy trusts a caller-supplied
-URL" — the ones that would quietly cost real work or open a hole.
+twenty-four defects in all, including "sync overwrites instead of merging", "a
+new machine creates its own Gist", "the shelf proxy trusts a caller-supplied
+URL", and "the uploader treats an unrecognised page as success" — the ones that
+would quietly cost real work, open a hole, or lie about having worked.
 
 `test-push.mjs` stubs `fetch` with a small in-memory Zotero server rather than
 mocking the client module, so the real pagination, the real PATCH-merge and the

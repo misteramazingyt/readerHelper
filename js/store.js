@@ -29,6 +29,7 @@ export const DEFAULT_SETTINGS = {
   zoteroUserId: '',
   zoteroProjectsRoot: '01 Projects',
   goodreadsUserId: '',
+  goodreadsAutoUpload: false,
   goodreadsShelves: 'read, currently-reading, to-read',
   todoistApiKey: '',
   githubToken: '',

@@ -168,6 +168,20 @@ const MUTATIONS = [
     suite: 'test-worker.mjs',
   },
   {
+    name: 'the uploader treats an unrecognised page as success',
+    file: 'tools/goodreads_upload.mjs',
+    find: "  return { ok: null, reason: 'unclear' };",
+    replace: "  return { ok: true, reason: 'unclear' };",
+    suite: 'test-goodreads.mjs',
+  },
+  {
+    name: 'the uploader stops preferring the newest export',
+    file: 'tools/goodreads_upload.mjs',
+    find: '    .sort((a, b) => b.t - a.t);',
+    replace: '    .sort((a, b) => a.t - b.t);',
+    suite: 'test-goodreads.mjs',
+  },
+  {
     name: 'project export stops de-duplicating linked copies',
     file: 'js/actions.js',
     find: 'if (seen.has(item.id)) continue;   // a linked copy in two groups counts once',
